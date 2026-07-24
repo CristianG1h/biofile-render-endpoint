@@ -8,7 +8,8 @@ const COLUMNAS_CONTROL = [
   'NUMERO_OS_BIOFILE',
   'FECHA_BIOFILE',
   'ERROR_BIOFILE',
-  'INTENTOS_BIOFILE'
+  'INTENTOS_BIOFILE',
+  'COMO_SE_ENTERO'
 ];
 
 function extraerSpreadsheetId(urlOId) {
