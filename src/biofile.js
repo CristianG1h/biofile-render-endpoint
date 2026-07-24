@@ -7,6 +7,111 @@ function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+
+function separarCiudadNacimiento(valor) {
+  const original = String(valor ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  if (!original) {
+    return {
+      original: '',
+      municipio: '',
+      departamento: '',
+      pais: '',
+      opcionEsperada: ''
+    };
+  }
+
+  // Formato principal guardado por el formulario:
+  // LA DORADA (CALDAS, COLOMBIA)
+  const conParentesis = original.match(
+    /^(.+?)\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)$/
+  );
+
+  if (conParentesis) {
+    const municipio = conParentesis[1].trim();
+    const departamento = conParentesis[2].trim();
+    const pais = conParentesis[3].trim();
+
+    return {
+      original,
+      municipio,
+      departamento,
+      pais,
+      opcionEsperada: `${municipio} (${departamento}, ${pais})`
+    };
+  }
+
+  // También acepta registros antiguos como: GARZÓN HUILA
+  // o LA DORADA CALDAS.
+  const departamentosColombia = [
+    'AMAZONAS', 'ANTIOQUIA', 'ARAUCA', 'ATLÁNTICO', 'BOLÍVAR',
+    'BOYACÁ', 'CALDAS', 'CAQUETÁ', 'CASANARE', 'CAUCA', 'CESAR',
+    'CHOCÓ', 'CÓRDOBA', 'CUNDINAMARCA', 'GUAINÍA', 'GUAVIARE',
+    'HUILA', 'LA GUAJIRA', 'MAGDALENA', 'META', 'NARIÑO',
+    'NORTE DE SANTANDER', 'PUTUMAYO', 'QUINDÍO', 'RISARALDA',
+    'SAN ANDRÉS Y PROVIDENCIA', 'SANTANDER', 'SUCRE', 'TOLIMA',
+    'VALLE DEL CAUCA', 'VAUPÉS', 'VICHADA', 'BOGOTÁ D.C.'
+  ].sort((a, b) => normalizar(b).length - normalizar(a).length);
+
+  const originalNormalizado = normalizar(original);
+  for (const departamento of departamentosColombia) {
+    const departamentoNormalizado = normalizar(departamento);
+    const sufijo = ` ${departamentoNormalizado}`;
+
+    if (!originalNormalizado.endsWith(sufijo)) continue;
+
+    const palabrasOriginal = original.split(/\s+/);
+    const cantidadPalabrasDepartamento = departamentoNormalizado.split(' ').length;
+    const municipio = palabrasOriginal
+      .slice(0, -cantidadPalabrasDepartamento)
+      .join(' ')
+      .trim();
+
+    if (municipio) {
+      return {
+        original,
+        municipio,
+        departamento,
+        pais: 'COLOMBIA',
+        opcionEsperada: `${municipio} (${departamento}, COLOMBIA)`
+      };
+    }
+  }
+
+  // También acepta: LA DORADA, CALDAS, COLOMBIA
+  const partes = original
+    .split(',')
+    .map((parte) => parte.trim())
+    .filter(Boolean);
+
+  if (partes.length >= 3) {
+    const municipio = partes[0];
+    const departamento = partes[1];
+    const pais = partes.slice(2).join(', ');
+
+    return {
+      original,
+      municipio,
+      departamento,
+      pais,
+      opcionEsperada: `${municipio} (${departamento}, ${pais})`
+    };
+  }
+
+  // Registros antiguos que solo tienen el municipio.
+  // En este caso se buscará una única sugerencia colombiana que empiece
+  // exactamente por el municipio escrito.
+  return {
+    original,
+    municipio: original,
+    departamento: '',
+    pais: 'COLOMBIA',
+    opcionEsperada: ''
+  };
+}
+
 async function visible(locator) {
   try {
     return (await locator.count()) > 0 && await locator.first().isVisible();
@@ -339,196 +444,345 @@ if (
   }
 }
 
-  async #seleccionarAutocompletado(locator, valor, etiqueta) {
-  const valorOriginal = String(valor ?? '').trim();
+  async #seleccionarCiudadNacimiento(locator, valor, etiqueta) {
+    const lugar = separarCiudadNacimiento(valor);
 
-  if (!valorOriginal) {
-    throw new Error(`El valor para ${etiqueta} está vacío.`);
-  }
-
-  const campoNormalizado = normalizar(etiqueta);
-
-  /*
-   * buscar: texto corto que se escribe en Biofile.
-   * seleccionar: opción exacta que obligatoriamente debe elegirse.
-   */
-  const reglas = {
-    'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO': {
-      buscar: 'INGRES',
-      seleccionar: 'EVALUACIÓN MÉDICA OCUPACIONAL DE INGRESO'
-    },
-
-    'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {
-      buscar: 'PART',
-      seleccionar: 'PARTICULARES'
-    },
-
-    'NOMBRE DE LA EMPRESA EN MISION': {
-      buscar: 'PART',
-      seleccionar: 'PARTICULARES'
-    },
-
-    'NOMBRE DEL PAQUETE': {
-      buscar: 'NO APL',
-      seleccionar: 'NO APLICA'
-    },
-
-    EPS: {
-      buscar: 'NO REFIERE',
-      seleccionar: 'NO REFIERE'
-    },
-
-    AFP: {
-      buscar: 'NO REFIERE',
-      seleccionar: 'NO REFIERE'
-    },
-
-    ARL: {
-      buscar: 'NO REFIERE',
-      seleccionar: 'NO REFIERE'
+    if (!lugar.municipio) {
+      throw new Error(`El valor para ${etiqueta} está vacío.`);
     }
-  };
 
-  const regla = reglas[campoNormalizado] || {
-    buscar: valorOriginal,
-    seleccionar: null
-  };
+    const municipioNormalizado = normalizar(lugar.municipio);
+    const esperadoNormalizado = normalizar(lugar.opcionEsperada);
 
-  const textoBusqueda = regla.buscar;
-  const textoExacto = regla.seleccionar;
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.evaluate((elemento) => {
+      elemento.setAttribute('autocomplete', 'off');
+      elemento.setAttribute('autocorrect', 'off');
+      elemento.setAttribute('spellcheck', 'false');
+    }).catch(() => {});
 
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
+    // Biofile necesita que se escriba solo el municipio para activar
+    // la búsqueda. El valor completo no se debe pegar directamente.
+    await locator.click({ clickCount: 3 }).catch(() => {});
+    await locator.fill('');
+    await locator.pressSequentially(lugar.municipio, {
+      delay: 150
+    });
 
-  await locator.evaluate((elemento) => {
-    elemento.setAttribute('autocomplete', 'off');
-    elemento.setAttribute('autocorrect', 'off');
-    elemento.setAttribute('spellcheck', 'false');
-  }).catch(() => {});
+    const selectorOpciones = [
+      'ul.ui-autocomplete:visible li:visible',
+      '[role="listbox"]:visible [role="option"]:visible',
+      '.autocomplete-suggestions:visible .autocomplete-suggestion:visible',
+      '.tt-menu:visible .tt-suggestion:visible',
+      '.select2-results:visible .select2-results__option:visible'
+    ].join(', ');
 
-  // Limpiar el campo.
-  await locator.click({ clickCount: 3 });
-  await locator.fill('');
+    const limite = Date.now() + 7000;
+    let candidatoExacto = null;
+    let textoSeleccionado = '';
+    let encontradas = [];
 
-  // Escribir para activar el autocompletado de Biofile.
-  await locator.pressSequentially(textoBusqueda, {
-    delay: 35
-  });
-
-  let seleccionConfirmada = false;
-  let opcionSeleccionada = '';
-
-  /*
-   * Para los campos configurados buscamos la opción exacta
-   * y hacemos clic directamente sobre ella.
-   */
-  if (textoExacto) {
-    const expresionExacta = new RegExp(
-      `^\\s*${escapeRegex(textoExacto)}\\s*$`,
-      'i'
-    );
-
-    const candidatos = this.page.getByText(expresionExacta);
-    const limite = Date.now() + 4000;
-
-    while (
-      Date.now() < limite &&
-      !seleccionConfirmada
-    ) {
-      const cantidad = await candidatos.count();
+    while (Date.now() < limite && !candidatoExacto) {
+      const opciones = this.page.locator(selectorOpciones);
+      const cantidad = await opciones.count();
+      const coincidenciasMunicipio = new Map();
+      const textosVistos = [];
 
       for (let indice = 0; indice < cantidad; indice += 1) {
-        const candidato = candidatos.nth(indice);
+        const opcion = opciones.nth(indice);
+        if (!await opcion.isVisible().catch(() => false)) continue;
 
-        if (await candidato.isVisible().catch(() => false)) {
-          opcionSeleccionada = String(
-            await candidato.innerText().catch(() => textoExacto)
-          ).trim();
+        const textoOriginal = String(
+          await opcion.innerText().catch(() => '')
+        ).trim().replace(/\s+/g, ' ');
 
-          await candidato.click({
-            force: true
-          });
+        if (!textoOriginal) continue;
+        if (!textosVistos.includes(textoOriginal)) {
+          textosVistos.push(textoOriginal);
+        }
 
-          seleccionConfirmada = true;
+        const textoNormalizado = normalizar(textoOriginal);
+
+        if (
+          esperadoNormalizado &&
+          textoNormalizado === esperadoNormalizado
+        ) {
+          candidatoExacto = opcion;
+          textoSeleccionado = textoOriginal;
           break;
+        }
+
+        if (!esperadoNormalizado) {
+          const mismoMunicipio =
+            textoNormalizado === municipioNormalizado ||
+            textoNormalizado.startsWith(`${municipioNormalizado} `);
+
+          const esColombia = textoNormalizado.includes('COLOMBIA');
+
+          if (
+            mismoMunicipio &&
+            esColombia &&
+            !coincidenciasMunicipio.has(textoNormalizado)
+          ) {
+            coincidenciasMunicipio.set(textoNormalizado, {
+              opcion,
+              textoOriginal
+            });
+          }
+        }
+      }
+
+      encontradas = textosVistos;
+
+      // Para registros antiguos que solo traen el municipio, únicamente
+      // se selecciona si Biofile muestra una sola coincidencia colombiana.
+      if (
+        !esperadoNormalizado &&
+        coincidenciasMunicipio.size === 1
+      ) {
+        const [unicaCoincidencia] = coincidenciasMunicipio.values();
+        candidatoExacto = unicaCoincidencia.opcion;
+        textoSeleccionado = unicaCoincidencia.textoOriginal;
+        break;
+      }
+
+      await this.page.waitForTimeout(150);
+    }
+
+    if (!candidatoExacto) {
+      const objetivo = lugar.opcionEsperada || lugar.municipio;
+      const detalle = encontradas.length
+        ? encontradas.join(' | ')
+        : 'Biofile no mostró ninguna sugerencia visible';
+
+      throw new Error(
+        `No se encontró la ciudad de nacimiento exacta "${objetivo}". ` +
+        `Se escribió únicamente "${lugar.municipio}". ` +
+        `Opciones mostradas: ${detalle}`
+      );
+    }
+
+    await candidatoExacto.click({ force: true });
+    await this.page.waitForTimeout(500);
+
+    const valorFinal = String(
+      await locator.inputValue().catch(() => '')
+    ).trim().replace(/\s+/g, ' ');
+
+    if (!valorFinal) {
+      throw new Error(
+        `El campo ${etiqueta} quedó vacío después de seleccionar la sugerencia.`
+      );
+    }
+
+    if (
+      esperadoNormalizado &&
+      normalizar(valorFinal) !== esperadoNormalizado
+    ) {
+      throw new Error(
+        `Biofile seleccionó una ciudad incorrecta. ` +
+        `Esperado: "${lugar.opcionEsperada}". ` +
+        `Resultado: "${valorFinal}".`
+      );
+    }
+
+    if (
+      !esperadoNormalizado &&
+      !normalizar(valorFinal).startsWith(municipioNormalizado)
+    ) {
+      throw new Error(
+        `Biofile seleccionó una ciudad que no coincide con "${lugar.municipio}". ` +
+        `Resultado: "${valorFinal}".`
+      );
+    }
+
+    await locator.evaluate((elemento) => {
+      elemento.dispatchEvent(new Event('input', { bubbles: true }));
+      elemento.dispatchEvent(new Event('change', { bubbles: true }));
+      elemento.dispatchEvent(new Event('blur', { bubbles: true }));
+    }).catch(() => {});
+
+    this.logger?.info(
+      'Ciudad de nacimiento seleccionada desde el autocompletado de Biofile.',
+      {
+        valorGoogleSheets: lugar.original,
+        municipioEscrito: lugar.municipio,
+        opcionSeleccionada: textoSeleccionado || valorFinal,
+        valorFinal
+      }
+    );
+  }
+
+  async #seleccionarAutocompletado(locator, valor, etiqueta) {
+    const valorOriginal = String(valor ?? '').trim();
+
+    if (!valorOriginal) {
+      throw new Error(`El valor para ${etiqueta} está vacío.`);
+    }
+
+    const campoNormalizado = normalizar(etiqueta);
+
+    if (campoNormalizado === 'CIUDAD DE NACIMIENTO') {
+      await this.#seleccionarCiudadNacimiento(
+        locator,
+        valorOriginal,
+        etiqueta
+      );
+      return;
+    }
+
+    /*
+     * buscar: texto corto que se escribe en Biofile.
+     * seleccionar: opción exacta que obligatoriamente debe elegirse.
+     */
+    const reglas = {
+      'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO': {
+        buscar: 'INGRES',
+        seleccionar: 'EVALUACIÓN MÉDICA OCUPACIONAL DE INGRESO'
+      },
+
+      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {
+        buscar: 'PART',
+        seleccionar: 'PARTICULARES'
+      },
+
+      'NOMBRE DE LA EMPRESA EN MISION': {
+        buscar: 'PART',
+        seleccionar: 'PARTICULARES'
+      },
+
+      'NOMBRE DEL PAQUETE': {
+        buscar: 'NO APL',
+        seleccionar: 'NO APLICA'
+      },
+
+      EPS: {
+        buscar: 'NO REFIERE',
+        seleccionar: 'NO REFIERE'
+      },
+
+      AFP: {
+        buscar: 'NO REFIERE',
+        seleccionar: 'NO REFIERE'
+      },
+
+      ARL: {
+        buscar: 'NO REFIERE',
+        seleccionar: 'NO REFIERE'
+      }
+    };
+
+    const regla = reglas[campoNormalizado] || {
+      buscar: valorOriginal,
+      seleccionar: null
+    };
+
+    const textoBusqueda = regla.buscar;
+    const textoExacto = regla.seleccionar;
+
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+
+    await locator.evaluate((elemento) => {
+      elemento.setAttribute('autocomplete', 'off');
+      elemento.setAttribute('autocorrect', 'off');
+      elemento.setAttribute('spellcheck', 'false');
+    }).catch(() => {});
+
+    await locator.click({ clickCount: 3 });
+    await locator.fill('');
+
+    await locator.pressSequentially(textoBusqueda, {
+      delay: 35
+    });
+
+    let seleccionConfirmada = false;
+    let opcionSeleccionada = '';
+
+    if (textoExacto) {
+      const expresionExacta = new RegExp(
+        `^\\s*${escapeRegex(textoExacto)}\\s*$`,
+        'i'
+      );
+
+      const candidatos = this.page.getByText(expresionExacta);
+      const limite = Date.now() + 4000;
+
+      while (
+        Date.now() < limite &&
+        !seleccionConfirmada
+      ) {
+        const cantidad = await candidatos.count();
+
+        for (let indice = 0; indice < cantidad; indice += 1) {
+          const candidato = candidatos.nth(indice);
+
+          if (await candidato.isVisible().catch(() => false)) {
+            opcionSeleccionada = String(
+              await candidato.innerText().catch(() => textoExacto)
+            ).trim();
+
+            await candidato.click({ force: true });
+            seleccionConfirmada = true;
+            break;
+          }
+        }
+
+        if (!seleccionConfirmada) {
+          await this.page.waitForTimeout(100);
         }
       }
 
       if (!seleccionConfirmada) {
-        await this.page.waitForTimeout(100);
+        throw new Error(
+          `Biofile no mostró la opción exacta "${textoExacto}" ` +
+          `para el campo ${etiqueta}.`
+        );
       }
+    } else {
+      await this.page.waitForTimeout(800);
+      await locator.press('Enter');
+      seleccionConfirmada = true;
     }
 
-    /*
-     * En estos campos no se permite escoger otra opción,
-     * porque podría crear una orden incorrecta.
-     */
-    if (!seleccionConfirmada) {
+    await this.page.waitForTimeout(250);
+
+    const valorFinal = String(
+      await locator.inputValue().catch(() => '')
+    ).trim();
+
+    if (!valorFinal) {
       throw new Error(
-        `Biofile no mostró la opción exacta "${textoExacto}" ` +
-        `para el campo ${etiqueta}.`
+        `El campo ${etiqueta} quedó vacío después de seleccionar la opción.`
       );
     }
-  } else {
-    /*
-     * Para Ciudad de Nacimiento y otros campos variables,
-     * Biofile resalta la primera opción correcta.
-     */
-    await this.page.waitForTimeout(800);
-    await locator.press('Enter');
-    seleccionConfirmada = true;
-  }
 
-  await this.page.waitForTimeout(250);
-
-  const valorFinal = String(
-    await locator.inputValue().catch(() => '')
-  ).trim();
-
-  if (!valorFinal) {
-    throw new Error(
-      `El campo ${etiqueta} quedó vacío después de seleccionar la opción.`
-    );
-  }
-
-  /*
-   * Verificar que Biofile haya dejado exactamente el valor solicitado.
-   */
-  if (
-    textoExacto &&
-    normalizar(valorFinal) !== normalizar(textoExacto)
-  ) {
-    throw new Error(
-      `Biofile seleccionó un valor incorrecto en ${etiqueta}. ` +
-      `Esperado: "${textoExacto}". ` +
-      `Resultado: "${valorFinal}".`
-    );
-  }
-
-  await locator.evaluate((elemento) => {
-    elemento.dispatchEvent(
-      new Event('input', { bubbles: true })
-    );
-
-    elemento.dispatchEvent(
-      new Event('change', { bubbles: true })
-    );
-
-    elemento.dispatchEvent(
-      new Event('blur', { bubbles: true })
-    );
-  }).catch(() => {});
-
-  this.logger?.info(
-    'Opción exacta de autocompletado seleccionada.',
-    {
-      campo: etiqueta,
-      textoEscrito: textoBusqueda,
-      opcionSeleccionada:
-        opcionSeleccionada || valorFinal,
-      valorFinal
+    if (
+      textoExacto &&
+      normalizar(valorFinal) !== normalizar(textoExacto)
+    ) {
+      throw new Error(
+        `Biofile seleccionó un valor incorrecto en ${etiqueta}. ` +
+        `Esperado: "${textoExacto}". ` +
+        `Resultado: "${valorFinal}".`
+      );
     }
-  );
-}
+
+    await locator.evaluate((elemento) => {
+      elemento.dispatchEvent(new Event('input', { bubbles: true }));
+      elemento.dispatchEvent(new Event('change', { bubbles: true }));
+      elemento.dispatchEvent(new Event('blur', { bubbles: true }));
+    }).catch(() => {});
+
+    this.logger?.info(
+      'Opción exacta de autocompletado seleccionada.',
+      {
+        campo: etiqueta,
+        textoEscrito: textoBusqueda,
+        opcionSeleccionada: opcionSeleccionada || valorFinal,
+        valorFinal
+      }
+    );
+  }
 
 async #escribirEnControl(
   locator,
