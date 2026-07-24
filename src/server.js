@@ -169,7 +169,10 @@ async function manejar(req, res) {
 
   const url = new URL(req.url, 'http://localhost');
 
-  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/health')) {
+  if (
+  ['GET', 'HEAD'].includes(req.method) &&
+  (url.pathname === '/' || url.pathname === '/api/health')
+) {
     responderJson(req, res, 200, {
       ok: true,
       servicio: 'BIOFILE Robot API',
