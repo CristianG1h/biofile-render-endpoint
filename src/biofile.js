@@ -471,6 +471,14 @@ if (
 
     const selectorOpciones = [
       'ul.ui-autocomplete:visible li:visible',
+      'ul.typeahead:visible li:visible',
+      '.typeahead.dropdown-menu:visible li:visible',
+      '.dropdown-menu:visible li:visible',
+      '.dropdown-menu:visible .dropdown-item:visible',
+      '.ac_results:visible li:visible',
+      '.autocomplete_completionListElement:visible > *:visible',
+      '.ajax__autocomplete_item:visible',
+      '.ajax__autocomplete_highlighted_item:visible',
       '[role="listbox"]:visible [role="option"]:visible',
       '.autocomplete-suggestions:visible .autocomplete-suggestion:visible',
       '.tt-menu:visible .tt-suggestion:visible',
@@ -534,6 +542,96 @@ if (
 
       encontradas = textosVistos;
 
+      /*
+       * Respaldo para BIOFILE:
+       * algunos menús de autocompletado no usan ninguna de las clases
+       * anteriores. En ese caso se busca en todo el DOM un elemento visible
+       * cuyo texto, sin tildes, coincida exactamente con la opción esperada.
+       */
+      if (!candidatoExacto && esperadoNormalizado) {
+        const marca = `biofile-ciudad-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}`;
+
+        const encontradaEnDom = await this.page.evaluate(
+          ({ esperado, marca }) => {
+            const norm = (valor) => String(valor || '')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-zA-Z0-9]+/g, ' ')
+              .trim()
+              .toUpperCase();
+
+            const esVisible = (elemento) => Boolean(
+              elemento &&
+              (elemento.offsetWidth ||
+                elemento.offsetHeight ||
+                elemento.getClientRects().length)
+            );
+
+            const prioridad = (elemento) => {
+              const tag = elemento.tagName;
+              if (tag === 'LI') return 0;
+              if (tag === 'A' || tag === 'BUTTON') return 1;
+              if (elemento.getAttribute('role') === 'option') return 2;
+              if (tag === 'DIV') return 3;
+              if (tag === 'SPAN') return 4;
+              return 5;
+            };
+
+            const candidatos = [
+              ...document.querySelectorAll(
+                'li, a, button, [role="option"], div, span, td'
+              )
+            ]
+              .filter(esVisible)
+              .filter((elemento) =>
+                norm(elemento.textContent) === esperado
+              )
+              .map((elemento) => {
+                const rect = elemento.getBoundingClientRect();
+                return {
+                  elemento,
+                  prioridad: prioridad(elemento),
+                  hijos: elemento.childElementCount,
+                  area: Math.max(1, rect.width * rect.height)
+                };
+              })
+              .sort((a, b) =>
+                a.prioridad - b.prioridad ||
+                a.hijos - b.hijos ||
+                a.area - b.area
+              );
+
+            const elegido = candidatos[0]?.elemento;
+            if (!elegido) return '';
+
+            elegido.setAttribute('data-biofile-ciudad-opcion', marca);
+            return String(elegido.textContent || '')
+              .trim()
+              .replace(/\s+/g, ' ');
+          },
+          {
+            esperado: esperadoNormalizado,
+            marca
+          }
+        ).catch(() => '');
+
+        if (encontradaEnDom) {
+          candidatoExacto = this.page
+            .locator(
+              `[data-biofile-ciudad-opcion="${marca}"]`
+            )
+            .first();
+
+          textoSeleccionado = encontradaEnDom;
+
+          if (!encontradas.includes(encontradaEnDom)) {
+            encontradas.push(encontradaEnDom);
+          }
+        }
+      }
+
       // Para registros antiguos que solo traen el municipio, únicamente
       // se selecciona si Biofile muestra una sola coincidencia colombiana.
       if (
@@ -549,21 +647,51 @@ if (
       await this.page.waitForTimeout(150);
     }
 
+    let seleccionadaConTeclado = false;
+
+    /*
+     * Último respaldo: en algunas versiones de BIOFILE la sugerencia
+     * aparece visualmente y queda resaltada, pero no es localizable por CSS.
+     * Enter selecciona esa sugerencia. Después se verifica el valor exacto,
+     * por lo que nunca se continúa con una ciudad equivocada.
+     */
     if (!candidatoExacto) {
+      await locator.press('Enter').catch(() => {});
+      await this.page.waitForTimeout(500);
+
+      const valorTeclado = String(
+        await locator.inputValue().catch(() => '')
+      ).trim().replace(/\s+/g, ' ');
+
+      const coincideTeclado = esperadoNormalizado
+        ? normalizar(valorTeclado) === esperadoNormalizado
+        : normalizar(valorTeclado).startsWith(
+            municipioNormalizado
+          );
+
+      if (coincideTeclado) {
+        seleccionadaConTeclado = true;
+        textoSeleccionado = valorTeclado;
+      }
+    }
+
+    if (!candidatoExacto && !seleccionadaConTeclado) {
       const objetivo = lugar.opcionEsperada || lugar.municipio;
       const detalle = encontradas.length
         ? encontradas.join(' | ')
-        : 'Biofile no mostró ninguna sugerencia visible';
+        : 'Biofile mostró el menú, pero su estructura no pudo identificarse';
 
       throw new Error(
         `No se encontró la ciudad de nacimiento exacta "${objetivo}". ` +
         `Se escribió únicamente "${lugar.municipio}". ` +
-        `Opciones mostradas: ${detalle}`
+        `Opciones detectadas: ${detalle}`
       );
     }
 
-    await candidatoExacto.click({ force: true });
-    await this.page.waitForTimeout(500);
+    if (candidatoExacto) {
+      await candidatoExacto.click({ force: true });
+      await this.page.waitForTimeout(500);
+    }
 
     const valorFinal = String(
       await locator.inputValue().catch(() => '')
