@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: biofile-robot-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HEADLESS
+        value: "true"
+      - key: GOOGLE_AUTH_MODE
+        value: service_account
+      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+        value: /etc/secrets/google-service-account.json
+      - key: RUNTIME_DIR
+        value: /tmp/biofile-robot
+      - key: API_KEY
+        sync: false
+      - key: GOOGLE_SHEETS_URL
+        sync: false
+      - key: GOOGLE_SHEETS_HOJA
+        value: Hoja 1
+      - key: BIOFILE_USUARIO
+        sync: false
+      - key: BIOFILE_CONTRASENA
+        sync: false
+      - key: DEFAULT_LOCALIDAD
+        sync: false
+      - key: DEFAULT_SEDE
+        sync: false
+      - key: DEFAULT_TIPO_EVALUACION
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
