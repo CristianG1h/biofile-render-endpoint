@@ -34,6 +34,44 @@ function separarCiudadNacimiento(valor) {
     const departamento = conParentesis[2].trim();
     const pais = conParentesis[3].trim();
 
+    /*
+     * BIOFILE nombra la opción de Bogotá así:
+     *
+     * BOGOTÁ (BOGOTÁ D.C., COLOMBIA)
+     *
+     * El formulario puede guardar:
+     *
+     * BOGOTÁ D.C. (BOGOTÁ D.C., COLOMBIA)
+     *
+     * Ambos representan el mismo lugar, pero el texto exacto es distinto.
+     * Se convierte al nombre real mostrado por BIOFILE antes de buscarlo.
+     */
+    const municipioNormalizado = normalizar(municipio);
+    const departamentoNormalizado = normalizar(departamento);
+    const paisNormalizado = normalizar(pais);
+
+    const esBogota = [
+      'BOGOTA',
+      'BOGOTA D C'
+    ].includes(municipioNormalizado);
+
+    const esDistritoCapital =
+      departamentoNormalizado === 'BOGOTA D C';
+
+    const esColombia =
+      paisNormalizado === 'COLOMBIA';
+
+    if (esBogota && esDistritoCapital && esColombia) {
+      return {
+        original,
+        municipio: 'BOGOTÁ',
+        departamento: 'BOGOTÁ D.C.',
+        pais: 'COLOMBIA',
+        opcionEsperada:
+          'BOGOTÁ (BOGOTÁ D.C., COLOMBIA)'
+      };
+    }
+
     return {
       original,
       municipio,
@@ -458,7 +496,7 @@ if (
      * BIOFILE no encuentra correctamente "BOGOTÁ D.C." cuando se escribe
      * con la abreviatura completa. Para activar su autocompletado se debe
      * buscar únicamente "BOGOTA"; después se selecciona y verifica la opción
-     * completa "BOGOTÁ D.C. (BOGOTÁ D.C., COLOMBIA)".
+     * completa "BOGOTÁ (BOGOTÁ D.C., COLOMBIA)".
      */
     const esBogotaDC = [
       'BOGOTA',
