@@ -647,8 +647,11 @@ if (
       await this.page.waitForTimeout(150);
     }
 
+    let seleccionadaConMouse = false;
+    let valorSeleccionadoConMouse = '';
     let seleccionadaConTeclado = false;
     let valorSeleccionadoConTeclado = '';
+    let ultimoValorProbado = '';
 
     const coincideCiudadEsperada = (valor) => {
       const valorNormalizado = normalizar(valor);
@@ -667,24 +670,78 @@ if (
       await locator.inputValue().catch(() => '')
     ).trim().replace(/\s+/g, ' ');
 
+    const escribirMunicipio = async () => {
+      await locator.click({ clickCount: 3 }).catch(() => {});
+      await locator.fill('');
+      await locator.pressSequentially(lugar.municipio, {
+        delay: 120
+      });
+      await this.page.waitForTimeout(900);
+    };
+
+    /*
+     * Respaldo por coordenadas.
+     *
+     * La captura demuestra que BIOFILE sí dibuja la sugerencia debajo del
+     * campo, aunque el elemento no sea visible para los selectores CSS.
+     * Playwright puede hacer clic por coordenadas relativas al input.
+     *
+     * Se prueban las primeras posiciones del menú y después de cada clic
+     * se valida el valor final. Nunca se continúa con una ciudad incorrecta.
+     */
+    if (!candidatoExacto) {
+      const desplazamientos = [
+        16, 40, 64, 88, 112,
+        136, 160, 184, 208, 232
+      ];
+
+      for (
+        const desplazamiento of desplazamientos
+      ) {
+        await escribirMunicipio();
+
+        const caja = await locator.boundingBox().catch(() => null);
+        if (!caja) break;
+
+        const x = caja.x + Math.min(
+          Math.max(caja.width * 0.35, 45),
+          Math.max(45, caja.width - 20)
+        );
+
+        const y = caja.y + caja.height + desplazamiento;
+
+        await this.page.mouse.click(x, y).catch(() => {});
+        await this.page.waitForTimeout(550);
+
+        const valorMouse = await leerValorCiudad();
+        ultimoValorProbado = valorMouse;
+
+        if (coincideCiudadEsperada(valorMouse)) {
+          seleccionadaConMouse = true;
+          valorSeleccionadoConMouse = valorMouse;
+          textoSeleccionado = valorMouse;
+          break;
+        }
+      }
+    }
+
     /*
      * Respaldo por teclado.
      *
-     * BIOFILE muestra visualmente el menú, pero en algunas versiones ese
-     * menú no queda disponible mediante selectores CSS. Por eso se vuelve
-     * a enfocar el campo y se prueba la selección real con el teclado.
-     *
-     * Primero intenta Enter directamente. Después vuelve a escribir el
-     * municipio y recorre hasta 15 sugerencias con ArrowDown + Enter.
-     * Cada resultado se valida antes de continuar.
+     * Si el menú no respondió al clic por coordenadas, se recorren sus
+     * opciones con ArrowDown + Enter y se valida cada resultado.
      */
-    if (!candidatoExacto) {
-      await locator.click().catch(() => {});
+    if (
+      !candidatoExacto &&
+      !seleccionadaConMouse
+    ) {
+      await escribirMunicipio();
       await locator.focus().catch(() => {});
       await this.page.keyboard.press('Enter').catch(() => {});
       await this.page.waitForTimeout(500);
 
       let valorTeclado = await leerValorCiudad();
+      ultimoValorProbado = valorTeclado;
 
       if (coincideCiudadEsperada(valorTeclado)) {
         seleccionadaConTeclado = true;
@@ -697,24 +754,19 @@ if (
         posicion <= 15 && !seleccionadaConTeclado;
         posicion += 1
       ) {
-        await locator.click({ clickCount: 3 }).catch(() => {});
-        await locator.fill('');
-        await locator.pressSequentially(lugar.municipio, {
-          delay: 120
-        });
-
-        await this.page.waitForTimeout(900);
+        await escribirMunicipio();
         await locator.focus().catch(() => {});
 
         for (let paso = 0; paso < posicion; paso += 1) {
           await this.page.keyboard.press('ArrowDown').catch(() => {});
-          await this.page.waitForTimeout(60);
+          await this.page.waitForTimeout(70);
         }
 
         await this.page.keyboard.press('Enter').catch(() => {});
         await this.page.waitForTimeout(500);
 
         valorTeclado = await leerValorCiudad();
+        ultimoValorProbado = valorTeclado;
 
         if (coincideCiudadEsperada(valorTeclado)) {
           seleccionadaConTeclado = true;
@@ -725,7 +777,11 @@ if (
       }
     }
 
-    if (!candidatoExacto && !seleccionadaConTeclado) {
+    if (
+      !candidatoExacto &&
+      !seleccionadaConMouse &&
+      !seleccionadaConTeclado
+    ) {
       const objetivo = lugar.opcionEsperada || lugar.municipio;
       const detalle = encontradas.length
         ? encontradas.join(' | ')
@@ -733,8 +789,9 @@ if (
 
       throw new Error(
         `No se pudo seleccionar la ciudad de nacimiento exacta "${objetivo}". ` +
-        `Se escribió únicamente "${lugar.municipio}" y se probaron ` +
-        `las sugerencias con teclado. Opciones detectadas: ${detalle}`
+        `Se probó el menú con clic por coordenadas y con teclado. ` +
+        `Último valor del campo: "${ultimoValorProbado || lugar.municipio}". ` +
+        `Opciones detectadas: ${detalle}`
       );
     }
 
@@ -743,9 +800,11 @@ if (
       await this.page.waitForTimeout(500);
     }
 
-    const valorFinal = seleccionadaConTeclado
-      ? valorSeleccionadoConTeclado
-      : await leerValorCiudad();
+    const valorFinal = seleccionadaConMouse
+      ? valorSeleccionadoConMouse
+      : seleccionadaConTeclado
+        ? valorSeleccionadoConTeclado
+        : await leerValorCiudad();
 
     if (!valorFinal) {
       throw new Error(
