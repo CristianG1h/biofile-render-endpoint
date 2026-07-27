@@ -648,30 +648,80 @@ if (
     }
 
     let seleccionadaConTeclado = false;
+    let valorSeleccionadoConTeclado = '';
+
+    const coincideCiudadEsperada = (valor) => {
+      const valorNormalizado = normalizar(valor);
+
+      if (esperadoNormalizado) {
+        return valorNormalizado === esperadoNormalizado;
+      }
+
+      return (
+        valorNormalizado.startsWith(municipioNormalizado) &&
+        valorNormalizado.includes('COLOMBIA')
+      );
+    };
+
+    const leerValorCiudad = async () => String(
+      await locator.inputValue().catch(() => '')
+    ).trim().replace(/\s+/g, ' ');
 
     /*
-     * Último respaldo: en algunas versiones de BIOFILE la sugerencia
-     * aparece visualmente y queda resaltada, pero no es localizable por CSS.
-     * Enter selecciona esa sugerencia. Después se verifica el valor exacto,
-     * por lo que nunca se continúa con una ciudad equivocada.
+     * Respaldo por teclado.
+     *
+     * BIOFILE muestra visualmente el menú, pero en algunas versiones ese
+     * menú no queda disponible mediante selectores CSS. Por eso se vuelve
+     * a enfocar el campo y se prueba la selección real con el teclado.
+     *
+     * Primero intenta Enter directamente. Después vuelve a escribir el
+     * municipio y recorre hasta 15 sugerencias con ArrowDown + Enter.
+     * Cada resultado se valida antes de continuar.
      */
     if (!candidatoExacto) {
-      await locator.press('Enter').catch(() => {});
+      await locator.click().catch(() => {});
+      await locator.focus().catch(() => {});
+      await this.page.keyboard.press('Enter').catch(() => {});
       await this.page.waitForTimeout(500);
 
-      const valorTeclado = String(
-        await locator.inputValue().catch(() => '')
-      ).trim().replace(/\s+/g, ' ');
+      let valorTeclado = await leerValorCiudad();
 
-      const coincideTeclado = esperadoNormalizado
-        ? normalizar(valorTeclado) === esperadoNormalizado
-        : normalizar(valorTeclado).startsWith(
-            municipioNormalizado
-          );
-
-      if (coincideTeclado) {
+      if (coincideCiudadEsperada(valorTeclado)) {
         seleccionadaConTeclado = true;
+        valorSeleccionadoConTeclado = valorTeclado;
         textoSeleccionado = valorTeclado;
+      }
+
+      for (
+        let posicion = 1;
+        posicion <= 15 && !seleccionadaConTeclado;
+        posicion += 1
+      ) {
+        await locator.click({ clickCount: 3 }).catch(() => {});
+        await locator.fill('');
+        await locator.pressSequentially(lugar.municipio, {
+          delay: 120
+        });
+
+        await this.page.waitForTimeout(900);
+        await locator.focus().catch(() => {});
+
+        for (let paso = 0; paso < posicion; paso += 1) {
+          await this.page.keyboard.press('ArrowDown').catch(() => {});
+          await this.page.waitForTimeout(60);
+        }
+
+        await this.page.keyboard.press('Enter').catch(() => {});
+        await this.page.waitForTimeout(500);
+
+        valorTeclado = await leerValorCiudad();
+
+        if (coincideCiudadEsperada(valorTeclado)) {
+          seleccionadaConTeclado = true;
+          valorSeleccionadoConTeclado = valorTeclado;
+          textoSeleccionado = valorTeclado;
+          break;
+        }
       }
     }
 
@@ -682,9 +732,9 @@ if (
         : 'Biofile mostró el menú, pero su estructura no pudo identificarse';
 
       throw new Error(
-        `No se encontró la ciudad de nacimiento exacta "${objetivo}". ` +
-        `Se escribió únicamente "${lugar.municipio}". ` +
-        `Opciones detectadas: ${detalle}`
+        `No se pudo seleccionar la ciudad de nacimiento exacta "${objetivo}". ` +
+        `Se escribió únicamente "${lugar.municipio}" y se probaron ` +
+        `las sugerencias con teclado. Opciones detectadas: ${detalle}`
       );
     }
 
@@ -693,9 +743,9 @@ if (
       await this.page.waitForTimeout(500);
     }
 
-    const valorFinal = String(
-      await locator.inputValue().catch(() => '')
-    ).trim().replace(/\s+/g, ' ');
+    const valorFinal = seleccionadaConTeclado
+      ? valorSeleccionadoConTeclado
+      : await leerValorCiudad();
 
     if (!valorFinal) {
       throw new Error(
