@@ -454,6 +454,21 @@ if (
     const municipioNormalizado = normalizar(lugar.municipio);
     const esperadoNormalizado = normalizar(lugar.opcionEsperada);
 
+    /*
+     * BIOFILE no encuentra correctamente "BOGOTÁ D.C." cuando se escribe
+     * con la abreviatura completa. Para activar su autocompletado se debe
+     * buscar únicamente "BOGOTA"; después se selecciona y verifica la opción
+     * completa "BOGOTÁ D.C. (BOGOTÁ D.C., COLOMBIA)".
+     */
+    const esBogotaDC = [
+      'BOGOTA',
+      'BOGOTA D C'
+    ].includes(municipioNormalizado);
+
+    const textoBusquedaMunicipio = esBogotaDC
+      ? 'BOGOTA'
+      : lugar.municipio;
+
     await locator.scrollIntoViewIfNeeded().catch(() => {});
     await locator.evaluate((elemento) => {
       elemento.setAttribute('autocomplete', 'off');
@@ -465,7 +480,7 @@ if (
     // la búsqueda. El valor completo no se debe pegar directamente.
     await locator.click({ clickCount: 3 }).catch(() => {});
     await locator.fill('');
-    await locator.pressSequentially(lugar.municipio, {
+    await locator.pressSequentially(textoBusquedaMunicipio, {
       delay: 150
     });
 
@@ -673,7 +688,7 @@ if (
     const escribirMunicipio = async () => {
       await locator.click({ clickCount: 3 }).catch(() => {});
       await locator.fill('');
-      await locator.pressSequentially(lugar.municipio, {
+      await locator.pressSequentially(textoBusquedaMunicipio, {
         delay: 120
       });
       await this.page.waitForTimeout(900);
@@ -843,7 +858,8 @@ if (
       'Ciudad de nacimiento seleccionada desde el autocompletado de Biofile.',
       {
         valorGoogleSheets: lugar.original,
-        municipioEscrito: lugar.municipio,
+        municipioOriginal: lugar.municipio,
+        textoBuscado: textoBusquedaMunicipio,
         opcionSeleccionada: textoSeleccionado || valorFinal,
         valorFinal
       }
