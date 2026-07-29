@@ -4,6 +4,8 @@ import { crearSesion } from './browser.js';
 import { BiofileClient } from './biofile.js';
 import { crearLogger } from './logger.js';
 import { asegurarDirectorio } from './util.js';
+import { obtenerDatosRegistroAdicionales } from './datos-registro-adicionales.js';
+import { aplicarDatosRegistroBiofile } from './aplicar-datos-registro.js';
 
 function normalizarDocumento(valor) {
   return String(valor ?? '').trim().replace(/\s+/g, '');
@@ -70,6 +72,15 @@ export async function procesarRegistroBiofile({
     );
   }
 
+  // Localidad, municipio de residencia, EPS, AFP y ARL son columnas nuevas y
+  // opcionales. Las hojas antiguas siguen usando los valores predeterminados.
+  const datosAdicionales = await obtenerDatosRegistroAdicionales({
+    google: config.google,
+    row: registro.row,
+    logger
+  });
+  Object.assign(registro, datosAdicionales);
+
   let sesion;
   let biofile;
   let numeroOrden = '';
@@ -96,6 +107,16 @@ export async function procesarRegistroBiofile({
     };
 
     const resultadoLlenado = await biofile.llenarOrden(registro, defaults);
+
+    // El llenado normal conserva municipio Bogotá y sede. Después se reemplazan
+    // únicamente localidad (cuando existe) y las afiliaciones del formulario.
+    await aplicarDatosRegistroBiofile({
+      page: sesion.page,
+      config,
+      registro,
+      defaults,
+      logger
+    });
 
     // Se marca aquí, cuando el formulario ya quedó lleno y está listo para guardar.
     await base.marcarProcesando(registro.row);
