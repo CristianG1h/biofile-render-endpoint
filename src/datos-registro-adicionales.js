@@ -106,6 +106,17 @@ function valorPorEncabezado(headers, fila, nombres) {
   return '';
 }
 
+function valorPorPalabras(headers, fila, palabras, excluidas = []) {
+  const requeridas = palabras.map(normalizar);
+  const prohibidas = excluidas.map(normalizar);
+  const indice = headers.findIndex((header) => {
+    const encabezado = normalizar(header);
+    return requeridas.every((palabra) => encabezado.includes(palabra))
+      && prohibidas.every((palabra) => !encabezado.includes(palabra));
+  });
+  return indice >= 0 ? texto(fila[indice]) : '';
+}
+
 /**
  * Lee campos nuevos y opcionales sin cambiar la clase BaseGoogleSheets existente.
  * Así el despliegue sigue siendo compatible con hojas antiguas que todavía no
@@ -125,12 +136,18 @@ export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
       leerRango({ spreadsheetId, range: `${hoja}!A${fila}:ZZ${fila}`, token })
     ]);
 
+    const localidad = valorPorEncabezado(headers, valores, [
+      'Localidad',
+      'Localidad Bogotá',
+      'Localidad Bogota',
+      'Localidad de Bogotá',
+      'Localidad de Bogota',
+      'Localidad de residencia',
+      'Localidad donde vive'
+    ]) || valorPorPalabras(headers, valores, ['LOCALIDAD'], ['NACIMIENTO']);
+
     const resultado = {
-      localidad: valorPorEncabezado(headers, valores, [
-        'Localidad',
-        'Localidad Bogotá',
-        'Localidad Bogota'
-      ]),
+      localidad,
       municipioResidencia: valorPorEncabezado(headers, valores, [
         'Municipio residencia',
         'Municipio o ciudad donde vive',
@@ -154,6 +171,16 @@ export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
       afp: resultado.afp || 'NO REFIERE',
       arl: resultado.arl || 'NO REFIERE'
     });
+
+    if (!resultado.localidad) {
+      const encabezadosLocalidad = headers
+        .filter((header) => normalizar(header).includes('LOCALIDAD'))
+        .map((header) => String(header));
+      logger?.warn('La fila no contiene una localidad. Se usará la predeterminada.', {
+        fila,
+        encabezadosLocalidad
+      });
+    }
 
     return resultado;
   } catch (error) {

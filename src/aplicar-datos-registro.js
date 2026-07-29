@@ -101,10 +101,10 @@ async function seleccionarOptionExacta(locator, valor, etiqueta) {
   return coincidencia.text.trim();
 }
 
-async function escribirAutocompletado(page, locator, valor, { verificarOpcion = false } = {}) {
+async function escribirLocalidadAutocompletada(page, locator, valor) {
   const tag = await locator.evaluate((elemento) => elemento.tagName.toUpperCase());
   if (tag === 'SELECT') {
-    return seleccionarOptionExacta(locator, valor, 'campo');
+    return seleccionarOptionExacta(locator, valor, 'Localidad');
   }
 
   await locator.scrollIntoViewIfNeeded().catch(() => {});
@@ -114,47 +114,56 @@ async function escribirAutocompletado(page, locator, valor, { verificarOpcion = 
   await page.waitForTimeout(500);
 
   const exacta = page.getByText(new RegExp(`^\\s*${escapeRegex(valor)}\\s*$`, 'i'));
-  let opcionSeleccionada = '';
   const cantidad = await exacta.count();
   for (let i = 0; i < cantidad; i += 1) {
     const candidata = exacta.nth(i);
     if (await candidata.isVisible().catch(() => false)) {
-      opcionSeleccionada = String(await candidata.innerText().catch(() => valor)).trim();
+      const opcionSeleccionada = String(await candidata.innerText().catch(() => valor)).trim();
       await candidata.click({ force: true });
-      break;
+      return opcionSeleccionada;
     }
   }
 
-  // Para EPS/AFP/ARL se conserva exactamente lo escrito si Biofile no muestra
-  // una coincidencia. No se elige una sugerencia diferente ni se bloquea el proceso.
-  if (!opcionSeleccionada && verificarOpcion) {
-    await locator.press('ArrowDown').catch(() => {});
-    await locator.press('Enter').catch(() => {});
+  throw new Error(`Biofile no mostró la localidad exacta "${valor}".`);
+}
+
+async function escribirTextoSinSugerencias(page, locator, valor, etiqueta) {
+  const texto = String(valor ?? '').trim();
+  const tag = await locator.evaluate((elemento) => elemento.tagName.toUpperCase());
+
+  // En la versión actual de BIOFILE estos campos son cajas de texto. Este
+  // respaldo mantiene compatibilidad si más adelante alguno cambia a SELECT.
+  if (tag === 'SELECT') {
+    return seleccionarOptionExacta(locator, texto, etiqueta);
   }
 
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ clickCount: 3 }).catch(() => {});
+  await locator.fill('');
+  await locator.fill(texto);
+  await locator.press('Escape').catch(() => {});
   await locator.evaluate((elemento) => {
     elemento.dispatchEvent(new Event('input', { bubbles: true }));
     elemento.dispatchEvent(new Event('change', { bubbles: true }));
-    elemento.dispatchEvent(new Event('blur', { bubbles: true }));
+    elemento.blur();
   }).catch(() => {});
+  await page.waitForTimeout(100);
 
-  return opcionSeleccionada || String(await locator.inputValue().catch(() => valor)).trim();
+  // No se busca, no se selecciona y no se valida ninguna sugerencia.
+  return texto;
 }
 
 /**
  * Ajusta únicamente los campos nuevos después del llenado normal de Biofile.
  * - Municipio y sede nunca se modifican.
- * - Localidad solo cambia cuando el formulario envió una localidad de Bogotá.
- * - EPS, AFP y ARL usan el dato de la hoja; vacío conserva NO REFIERE.
+ * - Localidad cambia cuando el formulario envió una localidad de Bogotá.
+ * - EPS, AFP y ARL se escriben exactamente como vienen de la hoja.
  */
 export async function aplicarDatosRegistroBiofile({ page, config, registro, defaults, logger }) {
   const localidad = String(registro.localidad || '').trim();
   if (localidad) {
     const control = await controlCercaDeEtiqueta(page, config, 'localidad', 'Localidad');
-    const tag = await control.evaluate((elemento) => elemento.tagName.toUpperCase());
-    const resultado = tag === 'SELECT'
-      ? await seleccionarOptionExacta(control, localidad, 'Localidad')
-      : await escribirAutocompletado(page, control, localidad, { verificarOpcion: true });
+    const resultado = await escribirLocalidadAutocompletada(page, control, localidad);
     logger?.info('Localidad del formulario aplicada en Biofile.', { localidad: resultado || localidad });
   } else {
     logger?.info('Sin localidad de Bogotá; se conserva la localidad predeterminada de Biofile.', {
@@ -170,13 +179,10 @@ export async function aplicarDatosRegistroBiofile({ page, config, registro, defa
 
   for (const [fieldKey, etiqueta, valor] of campos) {
     const control = await controlCercaDeEtiqueta(page, config, fieldKey, etiqueta);
-    const resultado = await escribirAutocompletado(page, control, String(valor).trim(), {
-      verificarOpcion: false
-    });
-    logger?.info('Afiliación aplicada en Biofile sin validación estricta.', {
+    const resultado = await escribirTextoSinSugerencias(page, control, valor, etiqueta);
+    logger?.info('Afiliación escrita literalmente en Biofile.', {
       campo: etiqueta.toUpperCase(),
-      solicitado: String(valor).trim(),
-      resultado
+      valor: resultado
     });
   }
 }
