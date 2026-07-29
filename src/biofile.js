@@ -1222,15 +1222,48 @@ async #escribirEnControl(
     await llenarPaciente('nivelEducativo', 'Nivel Educativo', r.nivelEducativo);
     await llenarPaciente('correo', 'Correo Electrónico', r.correo, { opcional: true });
 
-    const zonaOrigen = r.zona || defaults.zona;
+    /*
+     * La columna Zona puede contener temporalmente una localidad de Bogotá,
+     * por ejemplo FONTIBÓN, debido a la compatibilidad con el formulario
+     * anterior. BIOFILE solo acepta URBANA o RURAL en este selector.
+     *
+     * Si el valor recibido no es una zona válida, se utiliza DEFAULT_ZONA
+     * y la localidad se aplica posteriormente en aplicarDatosRegistroBiofile.
+     */
+    const zonaOrigen = String(r.zona || '').trim();
     const zonaNormalizada = normalizar(zonaOrigen);
+
+    const zonaPredeterminadaNormalizada = normalizar(
+      defaults.zona || 'URBANA'
+    );
+
+    const zonaPredeterminada =
+      zonaPredeterminadaNormalizada.startsWith('RURAL')
+        ? 'RURAL'
+        : 'URBANA';
+
     const zona = zonaNormalizada.startsWith('URBANA')
       ? 'URBANA'
       : zonaNormalizada.startsWith('RURAL')
         ? 'RURAL'
-        : zonaOrigen;
+        : zonaPredeterminada;
+
+    if (
+      zonaOrigen &&
+      !zonaNormalizada.startsWith('URBANA') &&
+      !zonaNormalizada.startsWith('RURAL')
+    ) {
+      this.logger?.info(
+        'El valor recibido en Zona corresponde a una localidad; se usará la zona predeterminada.',
+        {
+          valorRecibido: zonaOrigen,
+          zonaAplicada: zona
+        }
+      );
+    }
 
     await llenarPaciente('zona', 'Zona', zona);
+
     await llenarPaciente('direccion', 'Dirección', r.direccion);
     await llenarPaciente('barrio', 'Barrio', r.barrio, { opcional: true });
     await llenarPaciente(
