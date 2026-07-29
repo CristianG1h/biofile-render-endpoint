@@ -157,7 +157,8 @@ async function escribirTextoSinSugerencias(page, locator, valor, etiqueta) {
  * Ajusta únicamente los campos nuevos después del llenado normal de Biofile.
  * - Municipio y sede nunca se modifican.
  * - Localidad cambia cuando el formulario envió una localidad de Bogotá.
- * - EPS, AFP y ARL se escriben exactamente como vienen de la hoja.
+ * - EPS, AFP y ARL se escriben exactamente como vienen de la hoja,
+ *   sin elegir ni verificar sugerencias.
  */
 export async function aplicarDatosRegistroBiofile({ page, config, registro, defaults, logger }) {
   const localidad = String(registro.localidad || '').trim();

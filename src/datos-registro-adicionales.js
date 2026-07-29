@@ -120,7 +120,8 @@ function valorPorPalabras(headers, fila, palabras, excluidas = []) {
 /**
  * Lee campos nuevos y opcionales sin cambiar la clase BaseGoogleSheets existente.
  * Así el despliegue sigue siendo compatible con hojas antiguas que todavía no
- * tengan Localidad, Municipio residencia, EPS, AFP o ARL.
+ * tengan Localidad, Municipio residencia, EPS, AFP o ARL. También acepta
+ * la localidad guardada en la columna Zona para conservar el receptor antiguo.
  */
 export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
   const fila = Number(row || 0);
@@ -136,7 +137,7 @@ export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
       leerRango({ spreadsheetId, range: `${hoja}!A${fila}:ZZ${fila}`, token })
     ]);
 
-    const localidad = valorPorEncabezado(headers, valores, [
+    const localidadExplicita = valorPorEncabezado(headers, valores, [
       'Localidad',
       'Localidad Bogotá',
       'Localidad Bogota',
@@ -145,6 +146,17 @@ export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
       'Localidad de residencia',
       'Localidad donde vive'
     ]) || valorPorPalabras(headers, valores, ['LOCALIDAD'], ['NACIMIENTO']);
+
+    // El receptor antiguo ya conoce la propiedad "zona". Para no reemplazarlo
+    // ni perder sus correos, el formulario guarda la localidad en la columna
+    // Zona. Solo se interpreta como localidad cuando el valor no es URBANA/RURAL.
+    const valorZona = valorPorEncabezado(headers, valores, ['Zona']);
+    const zonaNormalizada = normalizar(valorZona);
+    const localidadDesdeZona = ['URBANA', 'RURAL'].includes(zonaNormalizada)
+      ? ''
+      : valorZona;
+
+    const localidad = localidadExplicita || localidadDesdeZona;
 
     const resultado = {
       localidad,
