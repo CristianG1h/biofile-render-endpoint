@@ -19,10 +19,18 @@ services:
         value: /tmp/biofile-robot
       - key: API_KEY
         sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: SESSION_TTL_MS
+        value: "43200000"
+      - key: BIOFILE_USERS_JSON
+        sync: false
       - key: GOOGLE_SHEETS_URL
         sync: false
       - key: GOOGLE_SHEETS_HOJA
         value: Hoja 1
+      - key: REGISTROS_CACHE_MS
+        value: "5000"
       - key: BIOFILE_USUARIO
         sync: false
       - key: BIOFILE_CONTRASENA
@@ -34,4 +42,4 @@ services:
       - key: DEFAULT_TIPO_EVALUACION
         sync: false
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
