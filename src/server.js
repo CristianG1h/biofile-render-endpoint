@@ -1,11 +1,24 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { crearGestorAuth, compararSeguro, usuarioPublico } from './auth.js';
 import { config, validarConfiguracion } from './config.js';
-import { procesarRegistroBiofile } from './procesar-registro.js';
 
 const jobs = new Map();
+const intentosLogin = new Map();
+const auth = crearGestorAuth({
+  usuarios: config.auth.users,
+  secreto: config.auth.sessionSecret,
+  ttlMs: config.auth.sessionTtlMs
+});
+
 let cola = Promise.resolve();
 let servidor;
+let moduloProcesador;
+
+async function obtenerProcesador() {
+  moduloProcesador ||= import('./procesar-registro.js');
+  return moduloProcesador;
+}
 
 function ahoraIso() {
   return new Date().toISOString();
@@ -38,32 +51,50 @@ function aplicarCors(req, res) {
   }
 }
 
-function responderJson(req, res, status, payload) {
+function responderJson(req, res, status, payload, headers = {}) {
   aplicarCors(req, res);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff'
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    ...headers
   });
-  res.end(JSON.stringify(payload));
+  res.end(req.method === 'HEAD' ? '' : JSON.stringify(payload));
 }
 
-function extraerClave(req) {
-  const directa = String(req.headers['x-api-key'] || '').trim();
-  if (directa) return directa;
-  const auth = String(req.headers.authorization || '');
-  const match = auth.match(/^Bearer\s+(.+)$/i);
+function extraerBearer(req) {
+  const valor = String(req.headers.authorization || '');
+  const match = valor.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : '';
 }
 
-function comparacionSegura(a, b) {
-  const aa = Buffer.from(String(a || ''));
-  const bb = Buffer.from(String(b || ''));
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+function cuentaLegacy() {
+  if (!config.biofile.usuario || !config.biofile.contrasena) return null;
+  return {
+    id: 'legacy',
+    nombre: config.biofile.usuario,
+    usuario: config.biofile.usuario,
+    contrasena: config.biofile.contrasena
+  };
 }
 
-function autorizado(req) {
-  return Boolean(config.api.key) && comparacionSegura(extraerClave(req), config.api.key);
+function resolverIdentidad(req) {
+  const bearer = extraerBearer(req);
+  const usuarioSesion = auth.validarToken(bearer);
+  if (usuarioSesion) {
+    return { tipo: 'sesion', cuenta: usuarioSesion };
+  }
+
+  const claveDirecta = String(req.headers['x-api-key'] || '').trim();
+  const clave = claveDirecta || bearer;
+  const legacy = cuentaLegacy();
+  if (legacy && config.api.key && compararSeguro(clave, config.api.key)) {
+    return { tipo: 'api_key', cuenta: legacy };
+  }
+
+  return null;
 }
 
 async function leerJson(req) {
@@ -89,6 +120,42 @@ async function leerJson(req) {
   }
 }
 
+function clienteLogin(req) {
+  const reenviado = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return reenviado || req.socket.remoteAddress || 'desconocido';
+}
+
+function bloqueoLogin(req) {
+  const clave = clienteLogin(req);
+  const registro = intentosLogin.get(clave);
+  if (!registro) return { bloqueado: false, clave };
+
+  const transcurrido = Date.now() - registro.inicio;
+  if (transcurrido >= config.auth.loginWindowMs) {
+    intentosLogin.delete(clave);
+    return { bloqueado: false, clave };
+  }
+
+  if (registro.intentos < config.auth.loginMaxAttempts) {
+    return { bloqueado: false, clave };
+  }
+
+  return {
+    bloqueado: true,
+    clave,
+    reintentarEn: Math.max(1, Math.ceil((config.auth.loginWindowMs - transcurrido) / 1000))
+  };
+}
+
+function registrarFalloLogin(clave) {
+  const actual = intentosLogin.get(clave);
+  if (!actual || Date.now() - actual.inicio >= config.auth.loginWindowMs) {
+    intentosLogin.set(clave, { inicio: Date.now(), intentos: 1 });
+    return;
+  }
+  actual.intentos += 1;
+}
+
 function documentoValido(valor) {
   return /^[A-Za-z0-9.-]{4,30}$/.test(String(valor || '').trim());
 }
@@ -101,6 +168,7 @@ function jobPublico(job) {
     documento: job.documento,
     fila: job.fila,
     subirImagenes: job.subirImagenes,
+    usuario: job.usuario,
     creadoEn: job.creadoEn,
     iniciadoEn: job.iniciadoEn || null,
     finalizadoEn: job.finalizadoEn || null,
@@ -109,12 +177,19 @@ function jobPublico(job) {
   };
 }
 
-function encolar({ documento, fila, subirImagenes }) {
+function puedeConsultar(job, identidad) {
+  return identidad.tipo === 'api_key' || job.usuario.id === identidad.cuenta.id;
+}
+
+function encolar({ documento, fila, subirImagenes, identidad }) {
   limpiarJobsAntiguos();
 
-  const duplicado = [...jobs.values()].find((job) =>
-    job.documento === documento && ['en_cola', 'procesando'].includes(job.estado)
-  );
+  const duplicado = [...jobs.values()].find((job) => {
+    const mismaSeleccion = documento
+      ? job.documento === documento
+      : Boolean(fila) && job.fila === fila;
+    return mismaSeleccion && ['en_cola', 'procesando'].includes(job.estado);
+  });
   if (duplicado) return { job: duplicado, duplicado: true };
 
   const id = crypto.randomUUID();
@@ -124,6 +199,9 @@ function encolar({ documento, fila, subirImagenes }) {
     documento,
     fila,
     subirImagenes,
+    usuario: usuarioPublico(identidad.cuenta),
+    cuenta: identidad.cuenta,
+    tipoIdentidad: identidad.tipo,
     creadoEn: ahoraIso(),
     iniciadoEn: null,
     finalizadoEn: null,
@@ -138,11 +216,14 @@ function encolar({ documento, fila, subirImagenes }) {
       job.estado = 'procesando';
       job.iniciadoEn = ahoraIso();
       try {
+        const { procesarRegistroBiofile } = await obtenerProcesador();
         job.resultado = await procesarRegistroBiofile({
           documento: job.documento,
           fila: job.fila,
           subirImagenes: job.subirImagenes,
-          jobId: job.id
+          jobId: job.id,
+          credencialesBiofile: job.cuenta,
+          sesionBiofileId: job.tipoIdentidad === 'sesion' ? job.cuenta.id : ''
         });
         job.estado = 'completado';
       } catch (error) {
@@ -153,10 +234,56 @@ function encolar({ documento, fila, subirImagenes }) {
         };
       } finally {
         job.finalizadoEn = ahoraIso();
+        job.cuenta = null;
       }
     });
 
   return { job, duplicado: false };
+}
+
+async function manejarLogin(req, res) {
+  if (!auth.activo) {
+    responderJson(req, res, 503, {
+      ok: false,
+      error: 'El acceso multiusuario todavía no está configurado en el servidor.'
+    });
+    return;
+  }
+
+  const bloqueo = bloqueoLogin(req);
+  if (bloqueo.bloqueado) {
+    responderJson(req, res, 429, {
+      ok: false,
+      error: 'Demasiados intentos. Espera unos minutos antes de volver a intentar.'
+    }, { 'Retry-After': String(bloqueo.reintentarEn) });
+    return;
+  }
+
+  const body = await leerJson(req);
+  const login = String(body.usuario || '').trim();
+  const contrasena = String(body.contrasena ?? '');
+  const usuario = login.length <= 150 && contrasena.length <= 500
+    ? auth.validarCredenciales(login, contrasena)
+    : null;
+
+  if (!usuario) {
+    registrarFalloLogin(bloqueo.clave);
+    responderJson(req, res, 401, {
+      ok: false,
+      error: 'Usuario o contraseña incorrectos.'
+    });
+    return;
+  }
+
+  intentosLogin.delete(bloqueo.clave);
+  const publico = auth.usuarioPublico(usuario);
+  responderJson(req, res, 200, {
+    ok: true,
+    token: auth.crearToken(usuario),
+    expiraEnSegundos: Math.floor(auth.ttlMs / 1000),
+    usuario: publico,
+    mensaje: `Hola ${publico.nombre}, estás conectado con BIOFILE.`
+  });
 }
 
 async function manejar(req, res) {
@@ -170,23 +297,40 @@ async function manejar(req, res) {
   const url = new URL(req.url, 'http://localhost');
 
   if (
-  ['GET', 'HEAD'].includes(req.method) &&
-  (url.pathname === '/' || url.pathname === '/api/health')
-) {
+    ['GET', 'HEAD'].includes(req.method) &&
+    (url.pathname === '/' || url.pathname === '/api/health')
+  ) {
     responderJson(req, res, 200, {
       ok: true,
       servicio: 'BIOFILE Robot API',
       estado: 'activo',
-      cola: [...jobs.values()].filter((j) => ['en_cola', 'procesando'].includes(j.estado)).length,
+      autenticacion: auth.activo ? 'multiusuario' : 'api_key',
+      cola: [...jobs.values()].filter((job) => ['en_cola', 'procesando'].includes(job.estado)).length,
       hora: ahoraIso()
     });
     return;
   }
 
-  if (!autorizado(req)) {
+  if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+    await manejarLogin(req, res);
+    return;
+  }
+
+  const identidad = resolverIdentidad(req);
+  if (!identidad) {
     responderJson(req, res, 401, {
       ok: false,
-      error: 'No autorizado. Envía la clave en X-API-Key o Authorization: Bearer.'
+      error: 'No autorizado. Inicia sesión o envía una clave API válida.'
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+    const publico = usuarioPublico(identidad.cuenta);
+    responderJson(req, res, 200, {
+      ok: true,
+      usuario: publico,
+      mensaje: `Hola ${publico.nombre}, estás conectado con BIOFILE.`
     });
     return;
   }
@@ -195,7 +339,6 @@ async function manejar(req, res) {
     const body = await leerJson(req);
     const documento = String(body.documento || '').trim().replace(/\s+/g, '');
     const fila = Number(body.fila || 0);
-
     const filaValida = Number.isInteger(fila) && fila >= 2;
 
     if (!documentoValido(documento) && !filaValida) {
@@ -207,16 +350,17 @@ async function manejar(req, res) {
     }
 
     const subirImagenes = body.subirImagenes !== false;
-    const { job, duplicado } = encolar({ documento, fila, subirImagenes });
+    const { job, duplicado } = encolar({ documento, fila, subirImagenes, identidad });
+    const visible = puedeConsultar(job, identidad);
 
     responderJson(req, res, duplicado ? 409 : 202, {
       ok: !duplicado,
       duplicado,
       mensaje: duplicado
-        ? 'Ese documento ya está en cola o procesándose.'
+        ? 'Ese documento o fila ya está en cola o procesándose.'
         : 'Solicitud recibida. Consulta el estado con el jobId.',
-      job: jobPublico(job),
-      statusPath: `/api/biofile/trabajos/${job.id}`
+      job: visible ? jobPublico(job) : null,
+      statusPath: visible ? `/api/biofile/trabajos/${job.id}` : null
     });
     return;
   }
@@ -224,7 +368,7 @@ async function manejar(req, res) {
   const matchJob = url.pathname.match(/^\/api\/biofile\/trabajos\/([0-9a-f-]+)$/i);
   if (req.method === 'GET' && matchJob) {
     const job = jobs.get(matchJob[1]);
-    if (!job) {
+    if (!job || !puedeConsultar(job, identidad)) {
       responderJson(req, res, 404, { ok: false, error: 'Trabajo no encontrado o expirado.' });
       return;
     }
@@ -237,7 +381,7 @@ async function manejar(req, res) {
 
 validarConfiguracion({
   requiereApi: true,
-  requiereBiofile: true,
+  requiereBiofile: !config.auth.users.length,
   requiereDefaults: true,
   requiereGoogle: true,
   requiereEscrituraGoogle: true
@@ -255,6 +399,7 @@ servidor = http.createServer((req, res) => {
 
 servidor.listen(config.api.port, '0.0.0.0', () => {
   console.log(`[API] BIOFILE Robot API escuchando en 0.0.0.0:${config.api.port}`);
+  console.log(`[API] Autenticación: ${auth.activo ? `${auth.cantidadUsuarios} usuarios` : 'clave API heredada'}`);
   console.log('[API] Endpoint: POST /api/biofile/enviar');
   console.log('[API] Salud: GET /api/health');
 });

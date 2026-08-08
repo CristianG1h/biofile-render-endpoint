@@ -1,12 +1,13 @@
 {
   "name": "biofile-render-endpoint",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "description": "API protegida para enviar un paciente específico de Google Sheets a BIOFILE usando Playwright.",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --env-file=.env src/server.js",
+    "test": "node --test test/*.test.js && node src/prueba-fechas.js",
     "procesar-documento": "node --env-file=.env src/index.js --modo=produccion --max=1",
     "diagnostico": "node --env-file=.env src/diagnostico.js",
     "probar-hoja": "node --env-file=.env src/probar-hoja.js",

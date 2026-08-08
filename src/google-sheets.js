@@ -12,6 +12,8 @@ const COLUMNAS_CONTROL = [
   'COMO_SE_ENTERO'
 ];
 
+const TOKEN_CACHE = new Map();
+
 function extraerSpreadsheetId(urlOId) {
   const valor = String(urlOId || '').trim();
   const match = valor.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
@@ -133,6 +135,13 @@ class SheetsApiClient {
     const ahora = Math.floor(Date.now() / 1000);
     if (this.accessToken && ahora < this.expiraEn - 60) return this.accessToken;
 
+    const cacheado = TOKEN_CACHE.get(this.credentials.client_email);
+    if (cacheado?.accessToken && ahora < cacheado.expiraEn - 60) {
+      this.accessToken = cacheado.accessToken;
+      this.expiraEn = cacheado.expiraEn;
+      return this.accessToken;
+    }
+
     const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
     const payload = base64url(JSON.stringify({
       iss: this.credentials.client_email,
@@ -162,6 +171,10 @@ class SheetsApiClient {
     }
     this.accessToken = data.access_token;
     this.expiraEn = ahora + Number(data.expires_in || 3600);
+    TOKEN_CACHE.set(this.credentials.client_email, {
+      accessToken: this.accessToken,
+      expiraEn: this.expiraEn
+    });
     return this.accessToken;
   }
 
@@ -193,6 +206,16 @@ class SheetsApiClient {
     return data.values || [];
   }
 
+  async batchGetValues(spreadsheetId, ranges) {
+    const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet`);
+    for (const range of ranges) url.searchParams.append('ranges', range);
+    url.searchParams.set('majorDimension', 'ROWS');
+    url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
+    url.searchParams.set('dateTimeRenderOption', 'SERIAL_NUMBER');
+    const data = await this.request(url.toString());
+    return (data.valueRanges || []).map((item) => item.values || []);
+  }
+
   async batchUpdateValues(spreadsheetId, data) {
     return this.request(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
       method: 'POST',
@@ -212,9 +235,10 @@ export class BaseGoogleSheets {
     this.rows = [];
     this.headers = new Map();
     this.api = null;
+    this.filaCargada = 0;
   }
 
-  async cargar() {
+  async cargar({ fila = 0 } = {}) {
     if (!['public', 'service_account'].includes(this.authMode)) {
       throw new Error('GOOGLE_AUTH_MODE debe ser public o service_account.');
     }
@@ -224,7 +248,7 @@ export class BaseGoogleSheets {
         credentialsPath: this.credentialsPath,
         credentialsJson: this.credentialsJson
       });
-      await this.#leerApi();
+      await this.#leerApi(Number(fila) || 0);
       await this.#asegurarColumnasControl();
     } else {
       await this.#leerPublico();
@@ -245,10 +269,25 @@ export class BaseGoogleSheets {
     this.rows = parseCsv(body);
   }
 
-  async #leerApi() {
-    const range = `${escaparHoja(this.hoja)}!A:AZ`;
-    this.rows = await this.api.getValues(this.spreadsheetId, range);
-    if (!this.rows.length) throw new Error(`La hoja "${this.hoja}" está vacía o no existe.`);
+  async #leerApi(fila = 0) {
+    const filaExacta = Number.isInteger(fila) && fila >= 2 ? fila : 0;
+    this.filaCargada = filaExacta;
+
+    if (filaExacta) {
+      const hoja = escaparHoja(this.hoja);
+      const [encabezados, valores] = await this.api.batchGetValues(this.spreadsheetId, [
+        `${hoja}!A1:ZZ1`,
+        `${hoja}!A${filaExacta}:ZZ${filaExacta}`
+      ]);
+      this.rows = [];
+      this.rows[0] = encabezados?.[0] || [];
+      this.rows[filaExacta - 1] = valores?.[0] || [];
+    } else {
+      const range = `${escaparHoja(this.hoja)}!A:ZZ`;
+      this.rows = await this.api.getValues(this.spreadsheetId, range);
+    }
+
+    if (!this.rows[0]?.length) throw new Error(`La hoja "${this.hoja}" está vacía o no existe.`);
   }
 
   #construirHeaders() {
@@ -271,7 +310,7 @@ export class BaseGoogleSheets {
       values: [[nombre]]
     }));
     await this.api.batchUpdateValues(this.spreadsheetId, data);
-    await this.#leerApi();
+    await this.#leerApi(this.filaCargada);
     this.logger?.info('Columnas de control agregadas a Google Sheets.', { columnas: faltantes });
   }
 
@@ -305,6 +344,28 @@ export class BaseGoogleSheets {
     return this.rows[rowNumber - 1]?.[col - 1] ?? '';
   }
 
+  #getPrimero(rowNumber, nombres) {
+    for (const nombre of nombres) {
+      const valor = this.#get(rowNumber, nombre);
+      if (valor) return valor;
+    }
+    return '';
+  }
+
+  #getPorPalabras(rowNumber, palabras, excluidas = []) {
+    const requeridas = palabras.map(normalizar);
+    const prohibidas = excluidas.map(normalizar);
+    for (const [encabezado, columna] of this.headers) {
+      if (
+        requeridas.every((palabra) => encabezado.includes(palabra)) &&
+        prohibidas.every((palabra) => !encabezado.includes(palabra))
+      ) {
+        return texto(this.rows[rowNumber - 1]?.[columna - 1]);
+      }
+    }
+    return '';
+  }
+
   obtenerPendientes({
   max = Infinity,
   documento = '',
@@ -315,7 +376,10 @@ export class BaseGoogleSheets {
   const documentoBuscado = numeroComoTexto(documento);
   const filaBuscada = Number(fila || 0);
 
-  for (let row = 2; row <= this.rows.length; row += 1) {
+  const filaInicial = filaBuscada || 2;
+  const filaFinal = filaBuscada || this.rows.length;
+
+  for (let row = filaInicial; row <= filaFinal; row += 1) {
     const numeroDocumento = numeroComoTexto(
       this.#getRaw(row, 'N° documento')
     );
@@ -346,6 +410,20 @@ export class BaseGoogleSheets {
       continue;
     }
 
+    const zona = this.#get(row, 'Zona');
+    const zonaNormalizada = normalizar(zona);
+    const localidad = this.#getPrimero(row, [
+      'Localidad',
+      'Localidad Bogotá',
+      'Localidad Bogota',
+      'Localidad de Bogotá',
+      'Localidad de Bogota',
+      'Localidad de residencia',
+      'Localidad donde vive'
+    ]) || this.#getPorPalabras(row, ['LOCALIDAD'], ['NACIMIENTO']) || (
+      ['URBANA', 'RURAL'].includes(zonaNormalizada) ? '' : zona
+    );
+
     registros.push({
       row,
       tipoDocumento: this.#get(row, 'Tipo doc'),
@@ -364,10 +442,24 @@ export class BaseGoogleSheets {
       estadoCivil: this.#get(row, 'Estado civil'),
       nivelEducativo: this.#get(row, 'Nivel educativo'),
       correo: this.#get(row, 'Correo'),
-      zona: this.#get(row, 'Zona'),
+      zona,
       direccion: this.#get(row, 'Dirección'),
       barrio: this.#get(row, 'Barrio'),
       municipio: this.#get(row, 'Municipio'),
+      localidad,
+      municipioResidencia: this.#getPrimero(row, [
+        'Municipio residencia',
+        'Municipio o ciudad donde vive',
+        'Municipio donde vive'
+      ]),
+      eps: this.#getPrimero(row, ['EPS', 'Eps']),
+      afp: this.#getPrimero(row, [
+        'AFP',
+        'Afp',
+        'Fondo de pensiones (AFP)',
+        'Fondo de pensiones'
+      ]),
+      arl: this.#getPrimero(row, ['ARL', 'Arl']),
 
       estrato: numeroComoTexto(
         this.#getRaw(row, 'Estrato')
