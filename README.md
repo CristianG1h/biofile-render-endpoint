@@ -137,3 +137,7 @@ El botón **Enviar a BIOFILE** deberá:
 5. Mostrar al usuario si quedó `completado` o `error`.
 
 No se deben poner el usuario ni la contraseña de BIOFILE dentro del HTML.
+
+## Verificación de acceso
+
+Conexión de escritura de GitHub verificada correctamente el 8 de agosto de 2026.
