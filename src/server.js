@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { crearGestorAuth, compararSeguro, usuarioPublico } from './auth.js';
 import { config, validarConfiguracion } from './config.js';
+import { listarRegistrosGoogleSheets } from './google-sheets.js';
 
 const jobs = new Map();
 const intentosLogin = new Map();
@@ -335,6 +336,37 @@ async function manejar(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/registros') {
+    if (identidad.tipo !== 'sesion') {
+      responderJson(req, res, 403, {
+        ok: false,
+        error: 'El listado de pacientes requiere una sesión individual.'
+      });
+      return;
+    }
+
+    const busqueda = String(url.searchParams.get('busqueda') || '').trim();
+    if (busqueda.length > 150) {
+      responderJson(req, res, 400, {
+        ok: false,
+        error: 'La búsqueda no puede superar 150 caracteres.'
+      });
+      return;
+    }
+
+    const registros = await listarRegistrosGoogleSheets({
+      ...config.google,
+      busqueda,
+      cacheMs: config.google.registrosCacheMs
+    });
+    responderJson(req, res, 200, {
+      ok: true,
+      registros,
+      total: registros.length
+    });
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/biofile/enviar') {
     const body = await leerJson(req);
     const documento = String(body.documento || '').trim().replace(/\s+/g, '');
@@ -400,6 +432,7 @@ servidor = http.createServer((req, res) => {
 servidor.listen(config.api.port, '0.0.0.0', () => {
   console.log(`[API] BIOFILE Robot API escuchando en 0.0.0.0:${config.api.port}`);
   console.log(`[API] Autenticación: ${auth.activo ? `${auth.cantidadUsuarios} usuarios` : 'clave API heredada'}`);
+  console.log('[API] Registros: GET /api/registros');
   console.log('[API] Endpoint: POST /api/biofile/enviar');
   console.log('[API] Salud: GET /api/health');
 });

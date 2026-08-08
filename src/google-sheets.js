@@ -13,6 +13,8 @@ const COLUMNAS_CONTROL = [
 ];
 
 const TOKEN_CACHE = new Map();
+const REGISTROS_CACHE = new Map();
+const REGISTROS_EN_CURSO = new Map();
 
 function extraerSpreadsheetId(urlOId) {
   const valor = String(urlOId || '').trim();
@@ -197,11 +199,11 @@ class SheetsApiClient {
     return data;
   }
 
-  async getValues(spreadsheetId, range) {
+  async getValues(spreadsheetId, range, { formateados = false } = {}) {
     const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`);
     url.searchParams.set('majorDimension', 'ROWS');
-    url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
-    url.searchParams.set('dateTimeRenderOption', 'SERIAL_NUMBER');
+    url.searchParams.set('valueRenderOption', formateados ? 'FORMATTED_VALUE' : 'UNFORMATTED_VALUE');
+    if (!formateados) url.searchParams.set('dateTimeRenderOption', 'SERIAL_NUMBER');
     const data = await this.request(url.toString());
     return data.values || [];
   }
@@ -222,6 +224,85 @@ class SheetsApiClient {
       body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data })
     });
   }
+}
+
+/**
+ * Convierte una respuesta de Sheets en los mismos objetos que consume el panel.
+ * __fila permite que el robot lea después únicamente la fila seleccionada.
+ */
+export function convertirFilasARegistros(filas = []) {
+  const encabezados = (filas[0] || []).map((valor) => texto(valor));
+  if (!encabezados.some(Boolean)) return [];
+
+  const registros = [];
+  for (let indice = 1; indice < filas.length; indice += 1) {
+    const valores = filas[indice] || [];
+    if (!valores.some((valor) => texto(valor))) continue;
+
+    const registro = { __fila: indice + 1 };
+    encabezados.forEach((encabezado, columna) => {
+      if (encabezado) registro[encabezado] = texto(valores[columna]);
+    });
+    registros.push(registro);
+  }
+  return registros;
+}
+
+export function filtrarRegistros(registros = [], busqueda = '') {
+  const termino = normalizar(String(busqueda || '').slice(0, 150));
+  if (!termino) return registros;
+
+  return registros.filter((registro) => Object.entries(registro).some(([clave, valor]) => (
+    clave !== '__fila' && normalizar(valor).includes(termino)
+  )));
+}
+
+/**
+ * Lista registros a través de la cuenta de servicio. Una caché muy corta evita
+ * descargar la misma hoja varias veces cuando distintos usuarios abren el panel
+ * al mismo tiempo, sin ocultar por mucho tiempo los estados recién actualizados.
+ */
+export async function listarRegistrosGoogleSheets({
+  urlOId,
+  hoja,
+  credentialsPath,
+  credentialsJson = '',
+  busqueda = '',
+  cacheMs = 5_000
+}) {
+  const spreadsheetId = extraerSpreadsheetId(urlOId);
+  const claveCache = `${spreadsheetId}\0${hoja}`;
+  const ahora = Date.now();
+  const vigente = REGISTROS_CACHE.get(claveCache);
+  let registros;
+
+  if (vigente && ahora < vigente.expiraEn) {
+    registros = vigente.registros;
+  } else {
+    let carga = REGISTROS_EN_CURSO.get(claveCache);
+    if (!carga) {
+      carga = (async () => {
+        const api = new SheetsApiClient({ credentialsPath, credentialsJson });
+        const rango = `${escaparHoja(hoja)}!A:ZZ`;
+        const filas = await api.getValues(spreadsheetId, rango, { formateados: true });
+        const nuevos = convertirFilasARegistros(filas);
+        const ttl = Math.max(0, Math.min(60_000, Number(cacheMs) || 0));
+        REGISTROS_CACHE.set(claveCache, { registros: nuevos, expiraEn: Date.now() + ttl });
+        return nuevos;
+      })();
+      REGISTROS_EN_CURSO.set(claveCache, carga);
+    }
+
+    try {
+      registros = await carga;
+    } finally {
+      if (REGISTROS_EN_CURSO.get(claveCache) === carga) {
+        REGISTROS_EN_CURSO.delete(claveCache);
+      }
+    }
+  }
+
+  return filtrarRegistros(registros, busqueda);
 }
 
 export class BaseGoogleSheets {

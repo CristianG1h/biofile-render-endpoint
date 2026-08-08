@@ -65,6 +65,15 @@ Authorization: Bearer TOKEN_TEMPORAL
 
 Sirve para restaurar el saludo cuando el usuario vuelve a abrir o recarga el panel.
 
+### Listar registros de forma protegida
+
+```http
+GET /api/registros?busqueda=APELLIDO_O_DOCUMENTO
+Authorization: Bearer TOKEN_TEMPORAL
+```
+
+La lectura de pacientes exige una sesión individual; la clave API heredada no puede consultar este endpoint. Así ya no es necesario publicar una clave de Google Apps Script en el HTML. La respuesta conserva los nombres originales de las columnas y agrega `__fila`, que el panel envía al robot para activar la lectura rápida de una sola fila. El servidor reutiliza el token de Google y mantiene una caché de cinco segundos para evitar descargas repetidas cuando varias personas abren el panel a la vez.
+
 ### Enviar paciente a BIOFILE
 
 ```http
@@ -157,6 +166,7 @@ Después de que todos los frontends usen `/api/auth/login`, se puede retirar la 
 - `GOOGLE_SHEETS_HOJA`, normalmente `Hoja 1`
 - `GOOGLE_AUTH_MODE=service_account`
 - `GOOGLE_SERVICE_ACCOUNT_FILE=/etc/secrets/google-service-account.json`
+- `REGISTROS_CACHE_MS`, opcional; `5000` evita lecturas duplicadas sin retrasar notablemente los cambios de estado.
 - `DEFAULT_LOCALIDAD`
 - `DEFAULT_SEDE`
 - `DEFAULT_TIPO_EVALUACION`
@@ -237,7 +247,7 @@ await fetch(`${API_URL}/api/biofile/enviar`, {
 npm test
 ```
 
-Las pruebas cubren autenticación, expiración y alteración de tokens, protección de contraseñas y conversión de fechas.
+Las pruebas cubren autenticación, expiración y alteración de tokens, protección de contraseñas, sesiones aisladas, conversión de fechas, mapeo de filas y reutilización de la caché de Google Sheets.
 
 ## Verificación de acceso
 

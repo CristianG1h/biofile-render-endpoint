@@ -97,6 +97,7 @@ export const config = {
   google: {
     urlOId: env('GOOGLE_SHEETS_URL'),
     hoja: env('GOOGLE_SHEETS_HOJA', 'Hoja 1'),
+    registrosCacheMs: entero(env('REGISTROS_CACHE_MS', '5000'), 5000),
     authMode: env('GOOGLE_AUTH_MODE', 'service_account'),
     credentialsPath: rutaAbsoluta(env('GOOGLE_SERVICE_ACCOUNT_FILE', '/etc/secrets/google-service-account.json')),
     credentialsJson: env('GOOGLE_SERVICE_ACCOUNT_JSON')

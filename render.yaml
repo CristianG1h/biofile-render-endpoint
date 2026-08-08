@@ -29,6 +29,8 @@ services:
         sync: false
       - key: GOOGLE_SHEETS_HOJA
         value: Hoja 1
+      - key: REGISTROS_CACHE_MS
+        value: "5000"
       - key: BIOFILE_USUARIO
         sync: false
       - key: BIOFILE_CONTRASENA
