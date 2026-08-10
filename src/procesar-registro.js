@@ -1,10 +1,10 @@
 import { config, validarConfiguracion } from './config.js';
+import { crearConfigUsuario } from './config-usuario.js';
 import { BaseGoogleSheets } from './google-sheets.js';
 import { crearSesion } from './browser.js';
 import { BiofileClient } from './biofile.js';
 import { crearLogger } from './logger.js';
 import { asegurarDirectorio } from './util.js';
-import { obtenerDatosRegistroAdicionales } from './datos-registro-adicionales.js';
 import { aplicarDatosRegistroBiofile } from './aplicar-datos-registro.js';
 
 function normalizarDocumento(valor) {
@@ -23,10 +23,13 @@ export async function procesarRegistroBiofile({
   documento,
   fila = 0,
   subirImagenes = true,
-  jobId = ''
+  jobId = '',
+  credencialesBiofile,
+  sesionBiofileId = ''
 } = {}) {
   const inicio = Date.now();
   const documentoNormalizado = normalizarDocumento(documento);
+  const configEjecucion = crearConfigUsuario(config, { credencialesBiofile, sesionBiofileId });
 
   if (!documentoNormalizado && !Number(fila)) {
     throw new Error('Debes indicar el documento o la fila exacta de Google Sheets.');
@@ -37,27 +40,28 @@ export async function procesarRegistroBiofile({
     requiereDefaults: true,
     requiereGoogle: true,
     requiereEscrituraGoogle: true
-  });
+  }, configEjecucion);
 
-  asegurarDirectorio(config.paths.logs);
-  asegurarDirectorio(config.paths.screenshots);
-  const logger = crearLogger(config.paths.logs);
+  asegurarDirectorio(configEjecucion.paths.logs);
+  asegurarDirectorio(configEjecucion.paths.screenshots);
+  const logger = crearLogger(configEjecucion.paths.logs);
 
   logger.info('Solicitud de envío a BIOFILE recibida.', {
     jobId: jobId || 'sin-job-id',
     documento: documentoNormalizado || 'no indicado',
     fila: Number(fila) || 'no indicada',
-    subirImagenes: Boolean(subirImagenes)
+    subirImagenes: Boolean(subirImagenes),
+    usuarioBiofile: configEjecucion.biofile.usuario
   });
 
   const base = await new BaseGoogleSheets({
-    urlOId: config.google.urlOId,
-    hoja: config.google.hoja,
-    authMode: config.google.authMode,
-    credentialsPath: config.google.credentialsPath,
-    credentialsJson: config.google.credentialsJson,
+    urlOId: configEjecucion.google.urlOId,
+    hoja: configEjecucion.google.hoja,
+    authMode: configEjecucion.google.authMode,
+    credentialsPath: configEjecucion.google.credentialsPath,
+    credentialsJson: configEjecucion.google.credentialsJson,
     logger
-  }).cargar();
+  }).cargar({ fila: Number(fila) || 0 });
 
   const [registro] = base.obtenerPendientes({
     max: 1,
@@ -72,15 +76,6 @@ export async function procesarRegistroBiofile({
     );
   }
 
-  // Localidad, municipio de residencia, EPS, AFP y ARL son columnas nuevas y
-  // opcionales. Las hojas antiguas siguen usando los valores predeterminados.
-  const datosAdicionales = await obtenerDatosRegistroAdicionales({
-    google: config.google,
-    row: registro.row,
-    logger
-  });
-  Object.assign(registro, datosAdicionales);
-
   let sesion;
   let biofile;
   let numeroOrden = '';
@@ -88,11 +83,11 @@ export async function procesarRegistroBiofile({
   let marcadoProcesando = false;
 
   try {
-    sesion = await crearSesion(config, logger);
+    sesion = await crearSesion(configEjecucion, logger);
     biofile = new BiofileClient({
       page: sesion.page,
       context: sesion.context,
-      config,
+      config: configEjecucion,
       logger
     });
 
@@ -100,10 +95,10 @@ export async function procesarRegistroBiofile({
     await biofile.abrirOrdenNueva();
 
     const defaults = {
-      ...config.defaults,
-      empresaMision: config.usarEmpresaExcel && registro.empresaExcel
+      ...configEjecucion.defaults,
+      empresaMision: configEjecucion.usarEmpresaExcel && registro.empresaExcel
         ? registro.empresaExcel
-        : config.defaults.empresaMision
+        : configEjecucion.defaults.empresaMision
     };
 
     const resultadoLlenado = await biofile.llenarOrden(registro, defaults);
@@ -112,7 +107,7 @@ export async function procesarRegistroBiofile({
     // únicamente localidad (cuando existe) y las afiliaciones del formulario.
     await aplicarDatosRegistroBiofile({
       page: sesion.page,
-      config,
+      config: configEjecucion,
       registro,
       defaults,
       logger
@@ -143,6 +138,7 @@ export async function procesarRegistroBiofile({
       numeroOrden,
       pacienteExistente: Boolean(resultadoLlenado?.pacienteExistente),
       imagenesEnviadas: Boolean(subirImagenes),
+      usuarioBiofile: configEjecucion.biofile.usuario,
       duracionSegundos: duracionSegundos(inicio)
     };
 
@@ -184,7 +180,7 @@ export async function procesarRegistroBiofile({
     throw errorPublico;
   } finally {
     if (sesion) {
-      await sesion.context.storageState({ path: config.browser.authPath }).catch(() => {});
+      await sesion.context.storageState({ path: configEjecucion.browser.authPath }).catch(() => {});
       await sesion.context.close().catch(() => {});
       await sesion.browser.close().catch(() => {});
     }

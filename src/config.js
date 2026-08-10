@@ -13,8 +13,64 @@ function listaCsv(valor) {
     .filter(Boolean);
 }
 
+function idUsuario(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function leerUsuariosBiofile() {
+  const jsonDirecto = String(env('BIOFILE_USERS_JSON')).trim();
+  const archivo = String(env('BIOFILE_USERS_FILE')).trim();
+
+  if (!jsonDirecto && !archivo) return [];
+
+  let contenido;
+  try {
+    contenido = jsonDirecto
+      ? JSON.parse(jsonDirecto)
+      : JSON.parse(fs.readFileSync(rutaAbsoluta(archivo), 'utf8'));
+  } catch (error) {
+    throw new Error(`No se pudo leer la configuración multiusuario de BIOFILE: ${error.message}`);
+  }
+
+  const elementos = Array.isArray(contenido)
+    ? contenido
+    : Object.entries(contenido || {}).map(([usuario, contrasena]) => ({
+        nombre: usuario,
+        usuario,
+        contrasena
+      }));
+
+  const ids = new Set();
+  const usuarios = elementos.map((item, index) => {
+    const nombre = String(item?.nombre || item?.usuario || '').trim();
+    const usuario = String(item?.usuario || '').trim();
+    const contrasena = String(item?.contrasena ?? '');
+    const id = idUsuario(item?.id || usuario || nombre);
+
+    if (!id || !nombre || !usuario || !contrasena) {
+      throw new Error(
+        `El usuario BIOFILE número ${index + 1} debe incluir nombre, usuario y contrasena.`
+      );
+    }
+    if (ids.has(id)) {
+      throw new Error(`Hay dos usuarios BIOFILE con el mismo id: ${id}`);
+    }
+    ids.add(id);
+
+    return { id, nombre, usuario, contrasena };
+  });
+
+  return usuarios;
+}
+
 const selectorsPath = rutaAbsoluta(env('SELECTORS_PATH', './config/selectors.json'));
 const runtimeDir = rutaAbsoluta(env('RUNTIME_DIR', '/tmp/biofile-robot'));
+const usuariosBiofile = leerUsuariosBiofile();
 
 export const config = {
   api: {
@@ -23,6 +79,13 @@ export const config = {
     allowedOrigins: listaCsv(env('ALLOWED_ORIGINS', '*')),
     maxBodyBytes: entero(env('MAX_BODY_BYTES', '65536'), 65536),
     jobRetentionMs: entero(env('JOB_RETENTION_MS', String(6 * 60 * 60 * 1000)), 6 * 60 * 60 * 1000)
+  },
+  auth: {
+    users: usuariosBiofile,
+    sessionSecret: env('SESSION_SECRET'),
+    sessionTtlMs: entero(env('SESSION_TTL_MS', String(12 * 60 * 60 * 1000)), 12 * 60 * 60 * 1000),
+    loginMaxAttempts: entero(env('LOGIN_MAX_ATTEMPTS', '5'), 5),
+    loginWindowMs: entero(env('LOGIN_WINDOW_MS', String(15 * 60 * 1000)), 15 * 60 * 1000)
   },
   biofile: {
     usuario: env('BIOFILE_USUARIO'),
@@ -34,6 +97,7 @@ export const config = {
   google: {
     urlOId: env('GOOGLE_SHEETS_URL'),
     hoja: env('GOOGLE_SHEETS_HOJA', 'Hoja 1'),
+    registrosCacheMs: entero(env('REGISTROS_CACHE_MS', '5000'), 5000),
     authMode: env('GOOGLE_AUTH_MODE', 'service_account'),
     credentialsPath: rutaAbsoluta(env('GOOGLE_SERVICE_ACCOUNT_FILE', '/etc/secrets/google-service-account.json')),
     credentialsJson: env('GOOGLE_SERVICE_ACCOUNT_JSON')
@@ -88,25 +152,31 @@ export function validarConfiguracion({
   requiereDefaults = true,
   requiereGoogle = true,
   requiereEscrituraGoogle = false
-} = {}) {
+} = {}, configuracion = config) {
   const faltantes = [];
+  const actual = configuracion;
 
-  if (requiereApi && !config.api.key) faltantes.push('API_KEY');
-  if (requiereBiofile && !config.biofile.usuario) faltantes.push('BIOFILE_USUARIO');
-  if (requiereBiofile && !config.biofile.contrasena) faltantes.push('BIOFILE_CONTRASENA');
-  if (requiereGoogle && !config.google.urlOId) faltantes.push('GOOGLE_SHEETS_URL');
-  if (requiereGoogle && !config.google.hoja) faltantes.push('GOOGLE_SHEETS_HOJA');
-  if (requiereDefaults && !config.defaults.localidad) faltantes.push('DEFAULT_LOCALIDAD');
-  if (requiereDefaults && !config.defaults.sede) faltantes.push('DEFAULT_SEDE');
-  if (requiereDefaults && !config.defaults.tipoEvaluacion) faltantes.push('DEFAULT_TIPO_EVALUACION');
+  if (requiereApi && !actual.api.key && !actual.auth?.users?.length) {
+    faltantes.push('API_KEY o BIOFILE_USERS_JSON');
+  }
+  if (requiereApi && actual.auth?.users?.length && !actual.auth.sessionSecret) {
+    faltantes.push('SESSION_SECRET');
+  }
+  if (requiereBiofile && !actual.biofile.usuario) faltantes.push('BIOFILE_USUARIO');
+  if (requiereBiofile && !actual.biofile.contrasena) faltantes.push('BIOFILE_CONTRASENA');
+  if (requiereGoogle && !actual.google.urlOId) faltantes.push('GOOGLE_SHEETS_URL');
+  if (requiereGoogle && !actual.google.hoja) faltantes.push('GOOGLE_SHEETS_HOJA');
+  if (requiereDefaults && !actual.defaults.localidad) faltantes.push('DEFAULT_LOCALIDAD');
+  if (requiereDefaults && !actual.defaults.sede) faltantes.push('DEFAULT_SEDE');
+  if (requiereDefaults && !actual.defaults.tipoEvaluacion) faltantes.push('DEFAULT_TIPO_EVALUACION');
 
-  if (requiereEscrituraGoogle && config.google.authMode.toLowerCase() !== 'service_account') {
+  if (requiereEscrituraGoogle && actual.google.authMode.toLowerCase() !== 'service_account') {
     faltantes.push('GOOGLE_AUTH_MODE=service_account');
   }
 
-  if (requiereGoogle && config.google.authMode.toLowerCase() === 'service_account') {
-    const tieneJson = Boolean(config.google.credentialsJson);
-    const tieneArchivo = Boolean(config.google.credentialsPath) && fs.existsSync(config.google.credentialsPath);
+  if (requiereGoogle && actual.google.authMode.toLowerCase() === 'service_account') {
+    const tieneJson = Boolean(actual.google.credentialsJson);
+    const tieneArchivo = Boolean(actual.google.credentialsPath) && fs.existsSync(actual.google.credentialsPath);
     if (!tieneJson && !tieneArchivo) {
       faltantes.push('archivo secreto GOOGLE_SERVICE_ACCOUNT_FILE o GOOGLE_SERVICE_ACCOUNT_JSON');
     }
