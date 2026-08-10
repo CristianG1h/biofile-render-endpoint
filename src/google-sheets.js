@@ -88,7 +88,7 @@ function escaparHoja(nombre) {
 function numeroComoTexto(valor) {
   if (valor === null || valor === undefined || valor === '') return '';
   if (typeof valor === 'number') return Number.isInteger(valor) ? String(valor) : String(valor);
-  return texto(valor).replace(/\.0$/, '');
+  return texto(valor).replace(/\.0$/, '').replace(/\D/g, '');
 }
 
 function fechaHoraBogota() {
