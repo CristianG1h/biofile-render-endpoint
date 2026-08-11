@@ -32,29 +32,23 @@ services:
       - key: SESSION_TTL_MS
         value: "43200000"
 
-      # Usuarios BIOFILE. Las contraseñas nunca se guardan en GitHub.
+      # Clave maestra para cifrar las contraseñas de usuarios creados desde el panel.
+      # Debe tener mínimo 32 caracteres y mantenerse únicamente en Render.
+      - key: BIOFILE_ENCRYPTION_KEY
+        sync: false
+      - key: BIOFILE_USERS_SHEET
+        value: USUARIOS_BIOFILE
+      - key: BIOFILE_AUDIT_SHEET
+        value: AUDITORIA_BIOFILE
+
+      # SUPERADMIN PRINCIPAL. Los superadmin SOLO se crean desde Render.
       - key: BIOFILE_USER_CRISTIAN
         sync: false
       - key: BIOFILE_PASSWORD_CRISTIAN
         sync: false
       - key: BIOFILE_ROLE_CRISTIAN
-        value: admin
+        value: superadmin
 
-      - key: BIOFILE_USER_AURA
-        sync: false
-      - key: BIOFILE_PASSWORD_AURA
-        sync: false
-
-      - key: BIOFILE_USER_LUISA_RIOS
-        sync: false
-      - key: BIOFILE_PASSWORD_LUISA_RIOS
-        sync: false
-
-      - key: BIOFILE_USER_LUISA_BENAVIDES
-        sync: false
-      - key: BIOFILE_PASSWORD_LUISA_BENAVIDES
-        sync: false
-
-      # Se conserva solo para compatibilidad con el panel anterior.
+      # Compatibilidad temporal con el panel anterior. Puede eliminarse después de migrar.
       - key: API_KEY
         sync: false
