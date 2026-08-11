@@ -7,9 +7,12 @@ const COLUMNAS_CONTROL = [
   'ESTADO_BIOFILE',
   'NUMERO_OS_BIOFILE',
   'FECHA_BIOFILE',
+  'FECHA_BIOFILE_ISO',
   'ERROR_BIOFILE',
   'INTENTOS_BIOFILE',
-  'COMO_SE_ENTERO'
+  'COMO_SE_ENTERO',
+  'USUARIO_BIOFILE',
+  'MODO_INGRESO_BIOFILE'
 ];
 
 function extraerSpreadsheetId(urlOId) {
@@ -40,9 +43,8 @@ function parseCsv(csv) {
       continue;
     }
 
-    if (ch === '"') {
-      quoted = true;
-    } else if (ch === ',') {
+    if (ch === '"') quoted = true;
+    else if (ch === ',') {
       row.push(field);
       field = '';
     } else if (ch === '\n') {
@@ -50,9 +52,7 @@ function parseCsv(csv) {
       rows.push(row);
       row = [];
       field = '';
-    } else {
-      field += ch;
-    }
+    } else field += ch;
   }
 
   if (field.length || row.length) {
@@ -85,10 +85,14 @@ function escaparHoja(nombre) {
   return `'${String(nombre).replace(/'/g, "''")}'`;
 }
 
+function documentoComoTexto(valor) {
+  if (valor === null || valor === undefined || valor === '') return '';
+  return String(valor).trim().replace(/\.0$/, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
 function numeroComoTexto(valor) {
   if (valor === null || valor === undefined || valor === '') return '';
-  if (typeof valor === 'number') return Number.isInteger(valor) ? String(valor) : String(valor);
-  return texto(valor).replace(/\.0$/, '').replace(/\D/g, '');
+  return String(valor).trim().replace(/\.0$/, '').replace(/\D/g, '');
 }
 
 function fechaHoraBogota() {
@@ -102,6 +106,34 @@ function fechaHoraBogota() {
     second: '2-digit',
     hour12: false
   }).format(new Date());
+}
+
+function fechaIsoBogota() {
+  const partes = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(new Date()).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value])
+  );
+  return `${partes.year}-${partes.month}-${partes.day}T${partes.hour}:${partes.minute}:${partes.second}-05:00`;
+}
+
+function fechaSolo(valorIso, valorLegado = '') {
+  const iso = String(valorIso || '').trim();
+  const matchIso = iso.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (matchIso) return matchIso[1];
+
+  const legado = String(valorLegado || '').trim();
+  let m = legado.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = legado.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 }
 
 class SheetsApiClient {
@@ -123,7 +155,6 @@ class SheetsApiClient {
       throw new Error('El JSON de Google no contiene client_email o private_key.');
     }
 
-    // Permite pegar la clave privada como una variable con saltos escapados (\n).
     this.credentials.private_key = String(this.credentials.private_key).replace(/\\n/g, '\n');
     this.accessToken = '';
     this.expiraEn = 0;
@@ -145,14 +176,13 @@ class SheetsApiClient {
     const signer = crypto.createSign('RSA-SHA256');
     signer.update(unsigned);
     signer.end();
-    const firma = signer.sign(this.credentials.private_key);
-    const assertion = `${unsigned}.${base64url(firma)}`;
+    const assertion = `${unsigned}.${base64url(signer.sign(this.credentials.private_key))}`;
 
     const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        grant_type: 'urn:ietf:params:oauth-type:jwt-bearer'.replace('type:', 'grant-type:'),
         assertion
       })
     });
@@ -176,7 +206,8 @@ class SheetsApiClient {
       }
     });
     const bodyText = await response.text();
-    const data = bodyText ? JSON.parse(bodyText) : {};
+    let data = {};
+    try { data = bodyText ? JSON.parse(bodyText) : {}; } catch { data = {}; }
     if (!response.ok) {
       const detalle = data?.error?.message || bodyText || `HTTP ${response.status}`;
       throw new Error(`Error de Google Sheets: ${detalle}`);
@@ -305,103 +336,70 @@ export class BaseGoogleSheets {
     return this.rows[rowNumber - 1]?.[col - 1] ?? '';
   }
 
-  obtenerPendientes({
-  max = Infinity,
-  documento = '',
-  fila = 0
-} = {}) {
-  const registros = [];
-
-  const documentoBuscado = numeroComoTexto(documento);
-  const filaBuscada = Number(fila || 0);
-
-  for (let row = 2; row <= this.rows.length; row += 1) {
-    const numeroDocumento = numeroComoTexto(
-      this.#getRaw(row, 'N° documento')
-    );
-
-    if (!numeroDocumento) continue;
-
-    // Permite escoger una fila exacta de Google Sheets.
-    if (filaBuscada && row !== filaBuscada) {
-      continue;
+  #filaPorDocumento(documento) {
+    const buscado = documentoComoTexto(documento);
+    if (!buscado) return 0;
+    for (let row = this.rows.length; row >= 2; row -= 1) {
+      if (documentoComoTexto(this.#getRaw(row, 'N° documento')) === buscado) return row;
     }
-
-    // Permite escoger una persona por documento.
-    if (
-      documentoBuscado &&
-      numeroDocumento !== documentoBuscado
-    ) {
-      continue;
-    }
-
-    const estado = normalizar(
-      this.#get(row, 'ESTADO_BIOFILE')
-    );
-
-    if (
-      estado &&
-      !['PENDIENTE', 'ERROR'].includes(estado)
-    ) {
-      continue;
-    }
-
-    registros.push({
-      row,
-      tipoDocumento: this.#get(row, 'Tipo doc'),
-      numeroDocumento,
-      primerApellido: this.#get(row, 'Primer apellido'),
-      segundoApellido: this.#get(row, 'Segundo apellido'),
-      primerNombre: this.#get(row, 'Primer nombre'),
-      otrosNombres: this.#get(row, 'Otros nombres'),
-
-      fechaNacimiento: convertirFechaBiofile(
-        this.#getRaw(row, 'Fecha nacimiento')
-      ),
-
-      ciudadNacimiento: this.#get(row, 'Ciudad nacimiento'),
-      genero: this.#get(row, 'Género'),
-      estadoCivil: this.#get(row, 'Estado civil'),
-      nivelEducativo: this.#get(row, 'Nivel educativo'),
-      correo: this.#get(row, 'Correo'),
-      zona: this.#get(row, 'Zona'),
-      direccion: this.#get(row, 'Dirección'),
-      barrio: this.#get(row, 'Barrio'),
-      municipio: this.#get(row, 'Municipio'),
-
-      estrato: numeroComoTexto(
-        this.#getRaw(row, 'Estrato')
-      ),
-
-      celular: numeroComoTexto(
-        this.#getRaw(row, 'Celular')
-      ),
-
-      telefono: numeroComoTexto(
-        this.#getRaw(row, 'Teléfono fijo')
-      ),
-
-      profesionCargo: this.#get(row, 'Profesión o cargo'),
-      funcionesCargo: this.#get(row, 'Funciones del cargo'),
-      empresaExcel: this.#get(row, 'Empresa en misión'),
-      fotoUrl: this.#get(row, 'FOTO (enlace)'),
-      firmaUrl: this.#get(row, 'FIRMA (enlace)')
-    });
-
-    if (registros.length >= max) {
-      break;
-    }
+    return 0;
   }
 
-  return registros;
-}
+  obtenerPendientes({ max = Infinity, documento = '', fila = 0 } = {}) {
+    const registros = [];
+    const documentoBuscado = documentoComoTexto(documento);
+    const filaBuscada = Number(fila || 0);
+
+    for (let row = 2; row <= this.rows.length; row += 1) {
+      const numeroDocumento = documentoComoTexto(this.#getRaw(row, 'N° documento'));
+      if (!numeroDocumento) continue;
+      if (filaBuscada && row !== filaBuscada) continue;
+      if (documentoBuscado && numeroDocumento !== documentoBuscado) continue;
+
+      const estado = normalizar(this.#get(row, 'ESTADO_BIOFILE'));
+      if (estado && !['PENDIENTE', 'ERROR'].includes(estado)) continue;
+
+      registros.push({
+        row,
+        tipoDocumento: this.#get(row, 'Tipo doc'),
+        numeroDocumento,
+        primerApellido: this.#get(row, 'Primer apellido'),
+        segundoApellido: this.#get(row, 'Segundo apellido'),
+        primerNombre: this.#get(row, 'Primer nombre'),
+        otrosNombres: this.#get(row, 'Otros nombres'),
+        fechaNacimiento: convertirFechaBiofile(this.#getRaw(row, 'Fecha nacimiento')),
+        ciudadNacimiento: this.#get(row, 'Ciudad nacimiento'),
+        genero: this.#get(row, 'Género'),
+        estadoCivil: this.#get(row, 'Estado civil'),
+        nivelEducativo: this.#get(row, 'Nivel educativo'),
+        correo: this.#get(row, 'Correo'),
+        zona: this.#get(row, 'Zona'),
+        direccion: this.#get(row, 'Dirección'),
+        barrio: this.#get(row, 'Barrio'),
+        municipio: this.#get(row, 'Municipio'),
+        estrato: numeroComoTexto(this.#getRaw(row, 'Estrato')),
+        celular: numeroComoTexto(this.#getRaw(row, 'Celular')),
+        telefono: numeroComoTexto(this.#getRaw(row, 'Teléfono fijo')),
+        profesionCargo: this.#get(row, 'Profesión o cargo'),
+        funcionesCargo: this.#get(row, 'Funciones del cargo'),
+        empresaExcel: this.#get(row, 'Empresa en misión'),
+        fotoUrl: this.#get(row, 'FOTO (enlace)'),
+        firmaUrl: this.#get(row, 'FIRMA (enlace)')
+      });
+
+      if (registros.length >= max) break;
+    }
+
+    return registros;
+  }
+
   async #actualizar(row, valores) {
     if (this.authMode !== 'service_account') {
-      throw new Error('Para actualizar estados debes usar GOOGLE_AUTH_MODE=service_account.');
+      throw new Error('Para actualizar Google Sheets debes usar GOOGLE_AUTH_MODE=service_account.');
     }
     const data = Object.entries(valores).map(([nombre, valor]) => {
       const col = this.#col(nombre);
-      if (!col) throw new Error(`No existe la columna de control ${nombre}.`);
+      if (!col) throw new Error(`No existe la columna ${nombre} en Google Sheets.`);
       return {
         range: `${escaparHoja(this.hoja)}!${columnaA1(col)}${row}`,
         values: [[valor]]
@@ -416,39 +414,118 @@ export class BaseGoogleSheets {
     }
   }
 
-  async marcarProcesando(row) {
+  async actualizarCampos(row, valores) {
+    await this.#actualizar(Number(row), valores);
+  }
+
+  async actualizarCampoPorDocumento(documento, campo, valor) {
+    const row = this.#filaPorDocumento(documento);
+    if (!row) throw new Error('No se encontró ese documento en Google Sheets.');
+    if (!this.#col(campo)) throw new Error(`No existe la columna ${campo} en Google Sheets.`);
+    await this.#actualizar(row, { [campo]: valor });
+    return { row, campo, valor };
+  }
+
+  async marcarProcesando(row, usuario = '') {
     const actual = Number(this.#getRaw(row, 'INTENTOS_BIOFILE') || 0);
     await this.#actualizar(row, {
       ESTADO_BIOFILE: 'PROCESANDO',
       INTENTOS_BIOFILE: actual + 1,
-      ERROR_BIOFILE: ''
+      ERROR_BIOFILE: '',
+      USUARIO_BIOFILE: usuario || this.#get(row, 'USUARIO_BIOFILE'),
+      MODO_INGRESO_BIOFILE: 'AUTOMATICO',
+      FECHA_BIOFILE_ISO: fechaIsoBogota()
     });
   }
 
-  async marcarOrdenCreada(row, numeroOrden) {
+  async marcarOrdenCreada(row, numeroOrden, usuario = '') {
     await this.#actualizar(row, {
       ESTADO_BIOFILE: 'ORDEN_CREADA',
       NUMERO_OS_BIOFILE: numeroOrden || '',
-      FECHA_BIOFILE: fechaHoraBogota()
+      FECHA_BIOFILE: fechaHoraBogota(),
+      FECHA_BIOFILE_ISO: fechaIsoBogota(),
+      USUARIO_BIOFILE: usuario || this.#get(row, 'USUARIO_BIOFILE'),
+      MODO_INGRESO_BIOFILE: 'AUTOMATICO'
     });
   }
 
-  async marcarCompletado(row, numeroOrden) {
+  async marcarCompletado(row, numeroOrden, usuario = '', modo = 'AUTOMATICO') {
     await this.#actualizar(row, {
       ESTADO_BIOFILE: 'COMPLETADO',
       NUMERO_OS_BIOFILE: numeroOrden || this.#get(row, 'NUMERO_OS_BIOFILE'),
       FECHA_BIOFILE: fechaHoraBogota(),
-      ERROR_BIOFILE: ''
+      FECHA_BIOFILE_ISO: fechaIsoBogota(),
+      ERROR_BIOFILE: '',
+      USUARIO_BIOFILE: usuario || this.#get(row, 'USUARIO_BIOFILE'),
+      MODO_INGRESO_BIOFILE: String(modo || 'AUTOMATICO').toUpperCase()
     });
   }
 
-  async marcarError(row, error, { parcial = false, numeroOrden = '' } = {}) {
+  async marcarCompletadoManual(documento, usuario = '') {
+    const row = this.#filaPorDocumento(documento);
+    if (!row) throw new Error('No se encontró ese documento en Google Sheets.');
+    await this.marcarCompletado(row, this.#get(row, 'NUMERO_OS_BIOFILE'), usuario, 'MANUAL');
+    return { row };
+  }
+
+  async marcarError(row, error, { parcial = false, numeroOrden = '', usuario = '' } = {}) {
     await this.#actualizar(row, {
       ESTADO_BIOFILE: parcial ? 'PARCIAL' : 'ERROR',
       NUMERO_OS_BIOFILE: numeroOrden || this.#get(row, 'NUMERO_OS_BIOFILE'),
       FECHA_BIOFILE: fechaHoraBogota(),
-      ERROR_BIOFILE: String(error?.message || error).slice(0, 5000)
+      FECHA_BIOFILE_ISO: fechaIsoBogota(),
+      ERROR_BIOFILE: String(error?.message || error).slice(0, 5000),
+      USUARIO_BIOFILE: usuario || this.#get(row, 'USUARIO_BIOFILE'),
+      MODO_INGRESO_BIOFILE: 'AUTOMATICO'
     });
+  }
+
+  obtenerEstadisticasUsuarios({ desde = '', hasta = '' } = {}) {
+    const mapa = new Map();
+    let total = 0;
+
+    for (let row = 2; row <= this.rows.length; row += 1) {
+      const usuario = this.#get(row, 'USUARIO_BIOFILE');
+      if (!usuario) continue;
+
+      const fecha = fechaSolo(this.#get(row, 'FECHA_BIOFILE_ISO'), this.#get(row, 'FECHA_BIOFILE'));
+      if (!fecha) continue;
+      if (desde && fecha < desde) continue;
+      if (hasta && fecha > hasta) continue;
+
+      const estado = normalizar(this.#get(row, 'ESTADO_BIOFILE'));
+      const modo = normalizar(this.#get(row, 'MODO_INGRESO_BIOFILE'));
+      const actual = mapa.get(usuario) || {
+        usuario,
+        total: 0,
+        completados: 0,
+        errores: 0,
+        enProceso: 0,
+        manuales: 0,
+        automaticos: 0
+      };
+
+      actual.total += 1;
+      total += 1;
+      if (estado === 'COMPLETADO') actual.completados += 1;
+      else if (['ERROR', 'PARCIAL'].includes(estado)) actual.errores += 1;
+      else if (['PROCESANDO', 'ORDEN_CREADA'].includes(estado)) actual.enProceso += 1;
+      if (modo === 'MANUAL') actual.manuales += 1;
+      if (modo === 'AUTOMATICO') actual.automaticos += 1;
+      mapa.set(usuario, actual);
+    }
+
+    const usuarios = [...mapa.values()].sort((a, b) =>
+      b.completados - a.completados || b.total - a.total || a.usuario.localeCompare(b.usuario, 'es')
+    );
+
+    return {
+      desde,
+      hasta,
+      total,
+      lider: usuarios[0] || null,
+      usuarios
+    };
   }
 
   resumen() {
