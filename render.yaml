@@ -17,16 +17,10 @@ services:
         value: /etc/secrets/google-service-account.json
       - key: RUNTIME_DIR
         value: /tmp/biofile-robot
-      - key: API_KEY
-        sync: false
       - key: GOOGLE_SHEETS_URL
         sync: false
       - key: GOOGLE_SHEETS_HOJA
         value: Hoja 1
-      - key: BIOFILE_USUARIO
-        sync: false
-      - key: BIOFILE_CONTRASENA
-        sync: false
       - key: DEFAULT_LOCALIDAD
         sync: false
       - key: DEFAULT_SEDE
@@ -35,3 +29,32 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         value: "*"
+      - key: SESSION_TTL_MS
+        value: "43200000"
+
+      # Usuarios BIOFILE. Las contraseñas nunca se guardan en GitHub.
+      - key: BIOFILE_USER_CRISTIAN
+        sync: false
+      - key: BIOFILE_PASSWORD_CRISTIAN
+        sync: false
+      - key: BIOFILE_ROLE_CRISTIAN
+        value: admin
+
+      - key: BIOFILE_USER_AURA
+        sync: false
+      - key: BIOFILE_PASSWORD_AURA
+        sync: false
+
+      - key: BIOFILE_USER_LUISA_RIOS
+        sync: false
+      - key: BIOFILE_PASSWORD_LUISA_RIOS
+        sync: false
+
+      - key: BIOFILE_USER_LUISA_BENAVIDES
+        sync: false
+      - key: BIOFILE_PASSWORD_LUISA_BENAVIDES
+        sync: false
+
+      # Se conserva solo para compatibilidad con el panel anterior.
+      - key: API_KEY
+        sync: false
