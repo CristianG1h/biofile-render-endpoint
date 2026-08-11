@@ -3,11 +3,19 @@ import http from 'node:http';
 import { config, validarConfiguracion } from './config.js';
 import { BaseGoogleSheets } from './google-sheets.js';
 import { procesarRegistroBiofile } from './procesar-registro.js';
+import { UsuariosBiofileStore, normalizarUsuario } from './usuarios-store.js';
 
 const jobs = new Map();
 const colasUsuarios = new Map();
 const sesiones = new Map();
 let servidor;
+
+const usuariosStore = new UsuariosBiofileStore({
+  google: config.google,
+  hojaUsuarios: config.usuariosStore.hojaUsuarios,
+  hojaAuditoria: config.usuariosStore.hojaAuditoria,
+  encryptionKey: config.seguridad.encryptionKey
+});
 
 const CAMPOS_EDITABLES = new Set([
   'Tipo doc', 'N° documento', 'Ciudad nacimiento', 'Fecha nacimiento',
@@ -21,20 +29,13 @@ function ahoraIso() {
   return new Date().toISOString();
 }
 
-function normalizarUsuario(valor) {
-  return String(valor || '')
-    .trim()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .toUpperCase();
-}
-
 function usuarioPublico(usuario) {
   return usuario ? {
     id: usuario.id,
     nombre: usuario.usuario,
-    rol: usuario.rol
+    rol: usuario.rol,
+    activo: usuario.activo !== false,
+    fuente: usuario.fuente || 'panel'
   } : null;
 }
 
@@ -50,6 +51,12 @@ function limpiarSesiones() {
   const ahora = Date.now();
   for (const [token, sesion] of sesiones) {
     if (!sesion || sesion.expiraEn <= ahora) sesiones.delete(token);
+  }
+}
+
+function invalidarSesionesUsuario(usuarioId) {
+  for (const [token, sesion] of sesiones) {
+    if (sesion?.usuario?.id === usuarioId) sesiones.delete(token);
   }
 }
 
@@ -96,17 +103,26 @@ function comparacionSegura(a, b) {
   return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
 }
 
-function buscarUsuarioPorId(id) {
-  return config.usuariosBiofile.find((u) => u.id === id) || null;
-}
-
-function buscarUsuarioCredenciales(nombre, contrasena) {
+function buscarUsuarioEntorno(nombre, contrasena) {
   const normalizado = normalizarUsuario(nombre);
-  for (const usuario of config.usuariosBiofile) {
+  for (const usuario of config.usuariosEntorno) {
     if (normalizarUsuario(usuario.usuario) !== normalizado) continue;
     if (comparacionSegura(contrasena, usuario.contrasena)) return usuario;
   }
   return null;
+}
+
+function existeUsuarioEntorno(nombre) {
+  const normalizado = normalizarUsuario(nombre);
+  return config.usuariosEntorno.some((u) => normalizarUsuario(u.usuario) === normalizado);
+}
+
+async function buscarCredenciales(nombre, contrasena) {
+  const entorno = buscarUsuarioEntorno(nombre, contrasena);
+  if (entorno) return { estado: 'ok', usuario: entorno };
+
+  if (!usuariosStore.disponible()) return { estado: 'no_encontrado', usuario: null };
+  return usuariosStore.autenticar(nombre, contrasena);
 }
 
 function autenticar(req) {
@@ -114,19 +130,16 @@ function autenticar(req) {
   const token = extraerBearer(req);
   if (token) {
     const sesion = sesiones.get(token);
-    if (sesion && sesion.expiraEn > Date.now()) {
-      const usuario = buscarUsuarioPorId(sesion.usuarioId);
-      if (usuario) {
-        sesion.expiraEn = Date.now() + config.api.sessionTtlMs;
-        return { usuario, token, legado: false };
-      }
+    if (sesion && sesion.expiraEn > Date.now() && sesion.usuario) {
+      sesion.expiraEn = Date.now() + config.api.sessionTtlMs;
+      return { usuario: sesion.usuario, token, legado: false };
     }
   }
 
   // Compatibilidad temporal con el panel anterior que usaba X-API-Key.
   const apiKey = extraerApiKey(req);
   if (config.api.key && apiKey && comparacionSegura(apiKey, config.api.key)) {
-    const usuario = config.usuariosBiofile[0] || null;
+    const usuario = config.usuariosEntorno[0] || null;
     if (usuario) return { usuario, token: '', legado: true };
   }
 
@@ -137,7 +150,7 @@ function crearSesionPanel(usuario) {
   limpiarSesiones();
   const token = crypto.randomBytes(32).toString('base64url');
   sesiones.set(token, {
-    usuarioId: usuario.id,
+    usuario: { ...usuario },
     creadoEn: Date.now(),
     expiraEn: Date.now() + config.api.sessionTtlMs
   });
@@ -193,7 +206,6 @@ function jobPublico(job) {
 function encolar({ documento, fila, subirImagenes, usuario }) {
   limpiarJobsAntiguos();
 
-  // Evita crear dos órdenes para la misma persona aunque sean usuarios distintos.
   const duplicado = [...jobs.values()].find((job) =>
     job.documento === documento && ['en_cola', 'procesando'].includes(job.estado)
   );
@@ -276,6 +288,21 @@ function fechaValida(valor) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(valor || ''));
 }
 
+function requiereRol(usuario, roles) {
+  return roles.includes(usuario?.rol);
+}
+
+function usuarioRenderPublico(u) {
+  return {
+    id: u.id,
+    usuario: u.usuario,
+    rol: u.rol,
+    activo: true,
+    fuente: 'render',
+    soloLectura: true
+  };
+}
+
 async function manejar(req, res) {
   if (req.method === 'OPTIONS') {
     aplicarCors(req, res);
@@ -291,7 +318,9 @@ async function manejar(req, res) {
       ok: true,
       servicio: 'BIOFILE Robot API multiusuario',
       estado: 'activo',
-      usuariosConfigurados: config.usuariosBiofile.length,
+      usuariosRender: config.usuariosEntorno.length,
+      superadminsRender: config.usuariosEntorno.filter((u) => u.rol === 'superadmin').length,
+      gestionUsuariosDisponible: usuariosStore.disponible(),
       cola: [...jobs.values()].filter((j) => ['en_cola', 'procesando'].includes(j.estado)).length,
       colasPorUsuario: trabajosActivosPorUsuario(),
       hora: ahoraIso()
@@ -301,16 +330,20 @@ async function manejar(req, res) {
 
   if (req.method === 'POST' && url.pathname === '/api/auth/login') {
     const body = await leerJson(req);
-    const usuario = buscarUsuarioCredenciales(body.usuario, body.contrasena);
-    if (!usuario) {
+    const resultado = await buscarCredenciales(body.usuario, body.contrasena);
+    if (resultado.estado === 'inactivo') {
+      responderJson(req, res, 403, { ok: false, error: 'Su usuario se encuentra inactivo. Comuníquese con el superadministrador.' });
+      return;
+    }
+    if (resultado.estado !== 'ok' || !resultado.usuario) {
       responderJson(req, res, 401, { ok: false, error: 'Usuario o contraseña incorrectos.' });
       return;
     }
-    const token = crearSesionPanel(usuario);
+    const token = crearSesionPanel(resultado.usuario);
     responderJson(req, res, 200, {
       ok: true,
       token,
-      usuario: usuarioPublico(usuario),
+      usuario: usuarioPublico(resultado.usuario),
       expiraEnMs: config.api.sessionTtlMs
     });
     return;
@@ -318,10 +351,7 @@ async function manejar(req, res) {
 
   const autenticacion = autenticar(req);
   if (!autenticacion) {
-    responderJson(req, res, 401, {
-      ok: false,
-      error: 'Sesión no válida. Inicia sesión nuevamente.'
-    });
+    responderJson(req, res, 401, { ok: false, error: 'Sesión no válida. Inicia sesión nuevamente.' });
     return;
   }
   const usuario = autenticacion.usuario;
@@ -334,6 +364,91 @@ async function manejar(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
     if (autenticacion.token) sesiones.delete(autenticacion.token);
     responderJson(req, res, 200, { ok: true });
+    return;
+  }
+
+  if (url.pathname === '/api/superadmin/usuarios' && req.method === 'GET') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede gestionar usuarios.' });
+      return;
+    }
+    if (!usuariosStore.disponible()) {
+      responderJson(req, res, 503, { ok: false, error: 'Configura BIOFILE_ENCRYPTION_KEY en Render para habilitar la gestión de usuarios.' });
+      return;
+    }
+    const usuarios = await usuariosStore.listar();
+    responderJson(req, res, 200, {
+      ok: true,
+      usuarios,
+      usuariosRender: config.usuariosEntorno.map(usuarioRenderPublico),
+      hojas: {
+        usuarios: config.usuariosStore.hojaUsuarios,
+        auditoria: config.usuariosStore.hojaAuditoria
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/superadmin/usuarios' && req.method === 'POST') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede crear usuarios.' });
+      return;
+    }
+    if (!usuariosStore.disponible()) {
+      responderJson(req, res, 503, { ok: false, error: 'Configura BIOFILE_ENCRYPTION_KEY en Render.' });
+      return;
+    }
+    const body = await leerJson(req);
+    if (existeUsuarioEntorno(body.usuario)) {
+      responderJson(req, res, 409, { ok: false, error: 'Ese usuario todavía está configurado directamente en Render. Elimínalo de Render o usa otro nombre.' });
+      return;
+    }
+    const creado = await usuariosStore.crear({
+      usuario: body.usuario,
+      contrasena: body.contrasena,
+      rol: body.rol,
+      actor: usuario.usuario
+    });
+    responderJson(req, res, 201, { ok: true, usuario: creado });
+    return;
+  }
+
+  const matchUsuarioAdmin = url.pathname.match(/^\/api\/superadmin\/usuarios\/([0-9a-f-]+)$/i);
+  if (matchUsuarioAdmin && req.method === 'PATCH') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede modificar usuarios.' });
+      return;
+    }
+    if (!usuariosStore.disponible()) {
+      responderJson(req, res, 503, { ok: false, error: 'Configura BIOFILE_ENCRYPTION_KEY en Render.' });
+      return;
+    }
+    const body = await leerJson(req);
+    if (body.rol === 'superadmin') {
+      responderJson(req, res, 400, { ok: false, error: 'Los superadministradores solo se crean desde las variables de Render.' });
+      return;
+    }
+    if (body.usuario && existeUsuarioEntorno(body.usuario)) {
+      responderJson(req, res, 409, { ok: false, error: 'Ese nombre corresponde a un usuario configurado directamente en Render.' });
+      return;
+    }
+    const actualizado = await usuariosStore.actualizar(matchUsuarioAdmin[1], body, usuario.usuario);
+    if (actualizado.activo === false) invalidarSesionesUsuario(actualizado.id);
+    responderJson(req, res, 200, { ok: true, usuario: actualizado });
+    return;
+  }
+
+  if (url.pathname === '/api/superadmin/auditoria' && req.method === 'GET') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede ver la auditoría.' });
+      return;
+    }
+    if (!usuariosStore.disponible()) {
+      responderJson(req, res, 503, { ok: false, error: 'Configura BIOFILE_ENCRYPTION_KEY en Render.' });
+      return;
+    }
+    const auditoria = await usuariosStore.listarAuditoria(url.searchParams.get('limit') || 100);
+    responderJson(req, res, 200, { ok: true, auditoria });
     return;
   }
 
@@ -355,11 +470,7 @@ async function manejar(req, res) {
 
     const base = await cargarBase();
     const resultado = await base.actualizarCampoPorDocumento(documento, campo, valor);
-    responderJson(req, res, 200, {
-      ok: true,
-      ...resultado,
-      actualizadoPor: usuarioPublico(usuario)
-    });
+    responderJson(req, res, 200, { ok: true, ...resultado, actualizadoPor: usuarioPublico(usuario) });
     return;
   }
 
@@ -383,8 +494,8 @@ async function manejar(req, res) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/admin/estadisticas') {
-    if (usuario.rol !== 'admin') {
-      responderJson(req, res, 403, { ok: false, error: 'Solo el administrador puede ver este dashboard.' });
+    if (!requiereRol(usuario, ['admin', 'superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo administradores pueden ver este dashboard.' });
       return;
     }
     const desde = String(url.searchParams.get('desde') || '');
@@ -399,11 +510,7 @@ async function manejar(req, res) {
     }
     const base = await cargarBase();
     const estadisticas = base.obtenerEstadisticasUsuarios({ desde, hasta });
-    responderJson(req, res, 200, {
-      ok: true,
-      estadisticas,
-      colasActuales: trabajosActivosPorUsuario()
-    });
+    responderJson(req, res, 200, { ok: true, estadisticas, colasActuales: trabajosActivosPorUsuario() });
     return;
   }
 
@@ -414,10 +521,7 @@ async function manejar(req, res) {
     const filaValida = Number.isInteger(fila) && fila >= 2;
 
     if (!documentoValido(documento) && !filaValida) {
-      responderJson(req, res, 400, {
-        ok: false,
-        error: 'Indica un documento válido o una fila numérica de Google Sheets.'
-      });
+      responderJson(req, res, 400, { ok: false, error: 'Indica un documento válido o una fila numérica de Google Sheets.' });
       return;
     }
 
@@ -443,7 +547,7 @@ async function manejar(req, res) {
       responderJson(req, res, 404, { ok: false, error: 'Trabajo no encontrado o expirado.' });
       return;
     }
-    if (usuario.rol !== 'admin' && job.usuarioId !== usuario.id) {
+    if (!requiereRol(usuario, ['admin', 'superadmin']) && job.usuarioId !== usuario.id) {
       responderJson(req, res, 403, { ok: false, error: 'Este trabajo pertenece a otro usuario.' });
       return;
     }
@@ -462,10 +566,19 @@ validarConfiguracion({
   requiereEscrituraGoogle: true
 });
 
+if (usuariosStore.disponible()) {
+  usuariosStore.inicializar().catch((error) => {
+    console.error('[USUARIOS] No fue posible preparar las hojas de usuarios/auditoría:', error.message);
+  });
+} else {
+  console.warn('[USUARIOS] Gestión dinámica deshabilitada hasta configurar BIOFILE_ENCRYPTION_KEY (mínimo 32 caracteres).');
+}
+
 servidor = http.createServer((req, res) => {
   manejar(req, res).catch((error) => {
     console.error('[API] Error no controlado:', error);
-    responderJson(req, res, error.statusCode || 500, {
+    const status = error.statusCode || (/ya existe/i.test(error.message) ? 409 : 500);
+    responderJson(req, res, status, {
       ok: false,
       error: error.statusCode ? error.message : (error.message || 'Error interno del servidor.')
     });
@@ -474,7 +587,8 @@ servidor = http.createServer((req, res) => {
 
 servidor.listen(config.api.port, '0.0.0.0', () => {
   console.log(`[API] BIOFILE Robot API multiusuario escuchando en 0.0.0.0:${config.api.port}`);
-  console.log(`[API] Usuarios configurados: ${config.usuariosBiofile.length}`);
+  console.log(`[API] Usuarios configurados en Render: ${config.usuariosEntorno.length}`);
+  console.log(`[API] Gestión dinámica: ${usuariosStore.disponible() ? 'habilitada' : 'pendiente de BIOFILE_ENCRYPTION_KEY'}`);
   console.log('[API] Login: POST /api/auth/login');
   console.log('[API] Envío: POST /api/biofile/enviar');
   console.log('[API] Salud: GET /api/health');
