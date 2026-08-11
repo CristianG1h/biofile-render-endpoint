@@ -13,8 +13,53 @@ function listaCsv(valor) {
     .filter(Boolean);
 }
 
+function idSeguro(valor) {
+  return String(valor || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'usuario';
+}
+
+function cargarUsuariosBiofile() {
+  const usuarios = [];
+
+  for (const [nombreVariable, usuario] of Object.entries(process.env)) {
+    const match = nombreVariable.match(/^BIOFILE_USER_(.+)$/);
+    if (!match) continue;
+
+    const sufijo = match[1];
+    const contrasena = process.env[`BIOFILE_PASSWORD_${sufijo}`] ?? process.env[`BIOFILE_PASS_${sufijo}`] ?? '';
+    const rol = String(process.env[`BIOFILE_ROLE_${sufijo}`] || 'user').trim().toLowerCase();
+
+    if (!String(usuario || '').trim() || !String(contrasena || '').trim()) continue;
+
+    usuarios.push({
+      id: idSeguro(sufijo),
+      usuario: String(usuario).trim(),
+      contrasena: String(contrasena),
+      rol: rol === 'admin' ? 'admin' : 'user'
+    });
+  }
+
+  // Compatibilidad con la configuración antigua de un solo usuario.
+  if (!usuarios.length && env('BIOFILE_USUARIO') && env('BIOFILE_CONTRASENA')) {
+    usuarios.push({
+      id: 'legacy',
+      usuario: env('BIOFILE_USUARIO').trim(),
+      contrasena: env('BIOFILE_CONTRASENA'),
+      rol: 'admin'
+    });
+  }
+
+  return usuarios.sort((a, b) => a.usuario.localeCompare(b.usuario, 'es'));
+}
+
 const selectorsPath = rutaAbsoluta(env('SELECTORS_PATH', './config/selectors.json'));
 const runtimeDir = rutaAbsoluta(env('RUNTIME_DIR', '/tmp/biofile-robot'));
+const authDir = rutaAbsoluta(env('BIOFILE_AUTH_DIR', path.join(runtimeDir, 'auth')));
 
 export const config = {
   api: {
@@ -22,8 +67,10 @@ export const config = {
     key: env('API_KEY'),
     allowedOrigins: listaCsv(env('ALLOWED_ORIGINS', '*')),
     maxBodyBytes: entero(env('MAX_BODY_BYTES', '65536'), 65536),
-    jobRetentionMs: entero(env('JOB_RETENTION_MS', String(6 * 60 * 60 * 1000)), 6 * 60 * 60 * 1000)
+    jobRetentionMs: entero(env('JOB_RETENTION_MS', String(6 * 60 * 60 * 1000)), 6 * 60 * 60 * 1000),
+    sessionTtlMs: entero(env('SESSION_TTL_MS', String(12 * 60 * 60 * 1000)), 12 * 60 * 60 * 1000)
   },
+  usuariosBiofile: cargarUsuariosBiofile(),
   biofile: {
     usuario: env('BIOFILE_USUARIO'),
     contrasena: env('BIOFILE_CONTRASENA'),
@@ -64,7 +111,8 @@ export const config = {
     slowMo: entero(env('SLOW_MO_MS', '0'), 0),
     timeout: entero(env('TIMEOUT_MS', '45000'), 45000),
     executablePath: env('PLAYWRIGHT_EXECUTABLE_PATH'),
-    authPath: rutaAbsoluta(env('BIOFILE_AUTH_PATH', path.join(runtimeDir, 'auth', 'biofile.json'))),
+    authDir,
+    authPath: rutaAbsoluta(env('BIOFILE_AUTH_PATH', path.join(authDir, 'biofile.json'))),
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -82,6 +130,30 @@ export const config = {
   }
 };
 
+export function configParaUsuario(usuario) {
+  if (!usuario?.usuario || !usuario?.contrasena) {
+    throw new Error('No se recibió un usuario BIOFILE válido para crear la sesión.');
+  }
+
+  const id = idSeguro(usuario.id || usuario.usuario);
+  return {
+    ...config,
+    biofile: {
+      ...config.biofile,
+      usuario: usuario.usuario,
+      contrasena: usuario.contrasena
+    },
+    browser: {
+      ...config.browser,
+      authPath: path.join(config.browser.authDir, `${id}.json`)
+    },
+    paths: {
+      ...config.paths,
+      screenshots: path.join(config.paths.screenshots, id)
+    }
+  };
+}
+
 export function validarConfiguracion({
   requiereApi = false,
   requiereBiofile = true,
@@ -91,7 +163,9 @@ export function validarConfiguracion({
 } = {}) {
   const faltantes = [];
 
-  if (requiereApi && !config.api.key) faltantes.push('API_KEY');
+  if (requiereApi && !config.usuariosBiofile.length) {
+    faltantes.push('al menos un par BIOFILE_USER_* / BIOFILE_PASSWORD_*');
+  }
   if (requiereBiofile && !config.biofile.usuario) faltantes.push('BIOFILE_USUARIO');
   if (requiereBiofile && !config.biofile.contrasena) faltantes.push('BIOFILE_CONTRASENA');
   if (requiereGoogle && !config.google.urlOId) faltantes.push('GOOGLE_SHEETS_URL');
