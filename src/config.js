@@ -13,7 +13,7 @@ function listaCsv(valor) {
     .filter(Boolean);
 }
 
-function idSeguro(valor) {
+export function idSeguro(valor) {
   return String(valor || '')
     .trim()
     .toLowerCase()
@@ -23,7 +23,14 @@ function idSeguro(valor) {
     .replace(/^_+|_+$/g, '') || 'usuario';
 }
 
-function cargarUsuariosBiofile() {
+function normalizarRol(valor) {
+  const rol = String(valor || 'user').trim().toLowerCase();
+  if (rol === 'superadmin') return 'superadmin';
+  if (rol === 'admin') return 'admin';
+  return 'user';
+}
+
+function cargarUsuariosEntorno() {
   const usuarios = [];
 
   for (const [nombreVariable, usuario] of Object.entries(process.env)) {
@@ -32,25 +39,29 @@ function cargarUsuariosBiofile() {
 
     const sufijo = match[1];
     const contrasena = process.env[`BIOFILE_PASSWORD_${sufijo}`] ?? process.env[`BIOFILE_PASS_${sufijo}`] ?? '';
-    const rol = String(process.env[`BIOFILE_ROLE_${sufijo}`] || 'user').trim().toLowerCase();
+    const rol = normalizarRol(process.env[`BIOFILE_ROLE_${sufijo}`] || 'user');
 
     if (!String(usuario || '').trim() || !String(contrasena || '').trim()) continue;
 
     usuarios.push({
-      id: idSeguro(sufijo),
+      id: `env_${idSeguro(sufijo)}`,
       usuario: String(usuario).trim(),
       contrasena: String(contrasena),
-      rol: rol === 'admin' ? 'admin' : 'user'
+      rol,
+      activo: true,
+      fuente: 'render'
     });
   }
 
   // Compatibilidad con la configuración antigua de un solo usuario.
   if (!usuarios.length && env('BIOFILE_USUARIO') && env('BIOFILE_CONTRASENA')) {
     usuarios.push({
-      id: 'legacy',
+      id: 'env_legacy',
       usuario: env('BIOFILE_USUARIO').trim(),
       contrasena: env('BIOFILE_CONTRASENA'),
-      rol: 'admin'
+      rol: 'admin',
+      activo: true,
+      fuente: 'render'
     });
   }
 
@@ -70,7 +81,14 @@ export const config = {
     jobRetentionMs: entero(env('JOB_RETENTION_MS', String(6 * 60 * 60 * 1000)), 6 * 60 * 60 * 1000),
     sessionTtlMs: entero(env('SESSION_TTL_MS', String(12 * 60 * 60 * 1000)), 12 * 60 * 60 * 1000)
   },
-  usuariosBiofile: cargarUsuariosBiofile(),
+  usuariosEntorno: cargarUsuariosEntorno(),
+  seguridad: {
+    encryptionKey: env('BIOFILE_ENCRYPTION_KEY')
+  },
+  usuariosStore: {
+    hojaUsuarios: env('BIOFILE_USERS_SHEET', 'USUARIOS_BIOFILE'),
+    hojaAuditoria: env('BIOFILE_AUDIT_SHEET', 'AUDITORIA_BIOFILE')
+  },
   biofile: {
     usuario: env('BIOFILE_USUARIO'),
     contrasena: env('BIOFILE_CONTRASENA'),
@@ -163,8 +181,8 @@ export function validarConfiguracion({
 } = {}) {
   const faltantes = [];
 
-  if (requiereApi && !config.usuariosBiofile.length) {
-    faltantes.push('al menos un par BIOFILE_USER_* / BIOFILE_PASSWORD_*');
+  if (requiereApi && !config.usuariosEntorno.length) {
+    faltantes.push('al menos un usuario BIOFILE configurado en Render');
   }
   if (requiereBiofile && !config.biofile.usuario) faltantes.push('BIOFILE_USUARIO');
   if (requiereBiofile && !config.biofile.contrasena) faltantes.push('BIOFILE_CONTRASENA');
