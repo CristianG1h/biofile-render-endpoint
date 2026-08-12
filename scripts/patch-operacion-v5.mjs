@@ -368,6 +368,16 @@ if (!sheets.includes('/* ESTADOS_OPERACION_V5 */')) {
 `;
   if (!sheets.includes(antesStats)) throw new Error('No se encontró obtenerEstadisticasUsuarios.');
   sheets = sheets.replace(antesStats, eliminado + antesStats);
+
+  // Un registro en Eliminados queda en el historial/auditoría, pero no suma
+  // en el dashboard operativo de ingresos de ningún usuario.
+  const estadoStats = "      const estado = normalizar(this.#get(row, 'ESTADO_BIOFILE'));\n      const modo = normalizar(this.#get(row, 'MODO_INGRESO_BIOFILE'));";
+  if (!sheets.includes(estadoStats)) throw new Error('No se encontró el cálculo de estado del dashboard.');
+  sheets = sheets.replace(
+    estadoStats,
+    "      const estado = normalizar(this.#get(row, 'ESTADO_BIOFILE'));\n      if (estado === 'ELIMINADO') continue;\n      const modo = normalizar(this.#get(row, 'MODO_INGRESO_BIOFILE'));"
+  );
+
   fs.writeFileSync(sheetsPath, sheets, 'utf8');
 }
 
