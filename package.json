@@ -5,8 +5,8 @@
   "type": "module",
   "description": "API protegida para enviar un paciente específico de Google Sheets a BIOFILE usando Playwright.",
   "scripts": {
-    "start": "node scripts/patch-job-progress.mjs && node scripts/patch-operacion-v5.mjs && node scripts/patch-auditoria-operativa-v5.mjs && node scripts/patch-sheet-range-v5.mjs && node --check src/biofile.js && node --check src/google-sheets.js && node --check src/server.js && node src/server.js",
-    "dev": "node --env-file=.env scripts/patch-job-progress.mjs && node --env-file=.env scripts/patch-operacion-v5.mjs && node --env-file=.env scripts/patch-auditoria-operativa-v5.mjs && node --env-file=.env scripts/patch-sheet-range-v5.mjs && node --check src/biofile.js && node --check src/google-sheets.js && node --check src/server.js && node --env-file=.env src/server.js",
+    "start": "node scripts/patch-job-progress.mjs && node scripts/patch-operacion-v5.mjs && node scripts/patch-auditoria-operativa-v5.mjs && node scripts/patch-sheet-range-v5.mjs && node scripts/fix-sheet-grid-columns-v5.mjs && node --check src/biofile.js && node --check src/google-sheets.js && node --check src/server.js && node src/server.js",
+    "dev": "node --env-file=.env scripts/patch-job-progress.mjs && node --env-file=.env scripts/patch-operacion-v5.mjs && node --env-file=.env scripts/patch-auditoria-operativa-v5.mjs && node --env-file=.env scripts/patch-sheet-range-v5.mjs && node --env-file=.env scripts/fix-sheet-grid-columns-v5.mjs && node --check src/biofile.js && node --check src/google-sheets.js && node --check src/server.js && node --env-file=.env src/server.js",
     "procesar-documento": "node --env-file=.env src/index.js --modo=produccion --max=1",
     "diagnostico": "node --env-file=.env src/diagnostico.js",
     "probar-hoja": "node --env-file=.env src/probar-hoja.js",
