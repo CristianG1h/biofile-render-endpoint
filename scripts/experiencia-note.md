@@ -1,1 +1,0 @@
-La integración de experiencia se aplica al completar ingresos BIOFILE.
