@@ -21,7 +21,9 @@ const pruebas = [
   ['listado autenticado', contenido.sheets.includes('/* LISTADO_AUTENTICADO_V61 */') && contenido.server.includes('/* LISTADO_API_V61 */')],
   ['fila exacta', contenido.sheets.includes('_FILA_SHEETS') && contenido.server.includes('filaValida')],
   ['eliminados restaurado', contenido.sheets.includes('ELIMINADOS_RESTAURADO_V61') && contenido.sheets.includes('marcarEliminadoFila')],
-  ['manual por fila', contenido.sheets.includes('marcarCompletadoManualFila')]
+  ['manual por fila', contenido.sheets.includes('marcarCompletadoManualFila')],
+  ['filtro histórico v6.2', contenido.sheets.includes('LISTADO_HISTORICO_V62')],
+  ['hora Colombia preservada', contenido.sheets.includes('/* FECHA_LOCAL_COLOMBIA_V63 */') && contenido.sheets.includes("+ '-05:00'")]
 ];
 
 const fallidas = pruebas.filter(([, ok]) => !ok);
