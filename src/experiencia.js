@@ -40,7 +40,8 @@ export async function notificarExperiencia({ registro, numeroOrden = '', usuario
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
-        redirect: 'follow'
+        redirect: 'follow',
+        signal: AbortSignal.timeout(10000)
       });
       const texto = await response.text();
       let data = {};
