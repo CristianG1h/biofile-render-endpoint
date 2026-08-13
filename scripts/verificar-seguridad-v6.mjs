@@ -17,10 +17,14 @@ const pruebas = [
   ['barrera antes de Guardar', contenido.procesar.includes('/* SEGURIDAD_PROCESO_V6 */') && contenido.procesar.includes('marcarGuardando')],
   ['API Bearer-only', contenido.server.includes('/* AUTH_BEARER_ONLY_V6 */') && !contenido.server.includes('legado: true')],
   ['documento canónico', contenido.server.includes('/* DOCUMENTO_CLAVE_V6 */')],
-  ['auditoría automática', contenido.server.includes('INGRESO_AUTOMATICO_COMPLETADO') && contenido.server.includes('INGRESO_AUTOMATICO_ERROR')]
+  ['auditoría automática', contenido.server.includes('INGRESO_AUTOMATICO_COMPLETADO') && contenido.server.includes('INGRESO_AUTOMATICO_ERROR')],
+  ['listado autenticado', contenido.sheets.includes('/* LISTADO_AUTENTICADO_V61 */') && contenido.server.includes('/* LISTADO_API_V61 */')],
+  ['fila exacta', contenido.sheets.includes('_FILA_SHEETS') && contenido.server.includes('filaValida')],
+  ['eliminados restaurado', contenido.sheets.includes('ELIMINADOS_RESTAURADO_V61') && contenido.sheets.includes('marcarEliminadoFila')],
+  ['manual por fila', contenido.sheets.includes('marcarCompletadoManualFila')]
 ];
 
 const fallidas = pruebas.filter(([, ok]) => !ok);
 for (const [nombre, ok] of pruebas) console.log(`${ok ? 'OK' : 'FAIL'} - ${nombre}`);
 if (fallidas.length) process.exit(1);
-console.log(`Seguridad v6 verificada: ${pruebas.length}/${pruebas.length} controles.`);
+console.log(`Seguridad BIOFILE verificada: ${pruebas.length}/${pruebas.length} controles.`);
