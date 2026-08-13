@@ -22,7 +22,7 @@ const pruebas = [
   ['fila exacta', contenido.sheets.includes('_FILA_SHEETS') && contenido.server.includes('filaValida')],
   ['eliminados restaurado', contenido.sheets.includes('ELIMINADOS_RESTAURADO_V61') && contenido.sheets.includes('marcarEliminadoFila')],
   ['manual por fila', contenido.sheets.includes('marcarCompletadoManualFila')],
-  ['filtro histórico v6.2', contenido.sheets.includes('LISTADO_HISTORICO_V62')],
+  ['filtro histórico v6.2', contenido.sheets.includes('CORTE_HISTORICO_PENDIENTES_V62')],
   ['hora Colombia preservada', contenido.sheets.includes('/* FECHA_LOCAL_COLOMBIA_V63 */') && contenido.sheets.includes("+ '-05:00'")]
 ];
 
