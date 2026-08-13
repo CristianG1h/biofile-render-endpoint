@@ -6,6 +6,7 @@ import { crearLogger } from './logger.js';
 import { asegurarDirectorio } from './util.js';
 import { obtenerDatosRegistroAdicionales } from './datos-registro-adicionales.js';
 import { aplicarDatosRegistroBiofile } from './aplicar-datos-registro.js';
+import { notificarExperiencia } from './experiencia.js';
 
 function normalizarDocumento(valor) {
   return String(valor ?? '').trim().replace(/\s+/g, '');
@@ -148,6 +149,15 @@ export async function procesarRegistroBiofile({
 
     await base.marcarCompletado(registro.row, numeroOrden, usuario.usuario, 'AUTOMATICO');
 
+    const experiencia = await notificarExperiencia({
+      registro,
+      numeroOrden,
+      usuario: usuario.usuario,
+      modoIngreso: 'AUTOMATICO',
+      fechaIngresoBiofileIso: new Date().toISOString(),
+      logger
+    });
+
     const resultado = {
       ok: true,
       usuario: usuario.usuario,
@@ -156,7 +166,8 @@ export async function procesarRegistroBiofile({
       numeroOrden,
       pacienteExistente: Boolean(resultadoLlenado?.pacienteExistente),
       imagenesEnviadas: Boolean(subirImagenes),
-      duracionSegundos: duracionSegundos(inicio)
+      duracionSegundos: duracionSegundos(inicio),
+      experiencia
     };
 
     logger.info('Registro enviado a BIOFILE correctamente.', resultado);
