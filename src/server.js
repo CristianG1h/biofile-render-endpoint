@@ -3,6 +3,7 @@ import http from 'node:http';
 import { config, validarConfiguracion } from './config.js';
 import { BaseGoogleSheets } from './google-sheets.js';
 import { procesarRegistroBiofile } from './procesar-registro.js';
+import { notificarExperiencia } from './experiencia.js';
 import { UsuariosBiofileStore, normalizarUsuario } from './usuarios-store.js';
 
 const jobs = new Map();
@@ -481,14 +482,33 @@ async function manejar(req, res) {
       responderJson(req, res, 400, { ok: false, error: 'Documento no válido.' });
       return;
     }
+
     const base = await cargarBase();
+    const [registroExperiencia] = base.obtenerPendientes({ max: 1, documento });
+    const fechaExperienciaIso = new Date().toISOString();
     const resultado = await base.marcarCompletadoManual(documento, usuario.usuario);
+
+    const experiencia = registroExperiencia
+      ? await notificarExperiencia({
+          registro: registroExperiencia,
+          numeroOrden: '',
+          usuario: usuario.usuario,
+          modoIngreso: 'MANUAL',
+          fechaIngresoBiofileIso: fechaExperienciaIso
+        })
+      : {
+          ok: false,
+          omitido: true,
+          motivo: 'No se encontró un registro pendiente para programar la encuesta.'
+        };
+
     responderJson(req, res, 200, {
       ok: true,
       documento,
       fila: resultado.row,
       usuario: usuarioPublico(usuario),
-      modo: 'MANUAL'
+      modo: 'MANUAL',
+      experiencia
     });
     return;
   }
