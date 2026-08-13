@@ -1,0 +1,24 @@
+name: Validar BIOFILE
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  seguridad-y-sintaxis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Ejecutar pruebas de seguridad
+        run: npm test
