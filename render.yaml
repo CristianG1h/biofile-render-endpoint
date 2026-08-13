@@ -32,6 +32,12 @@ services:
       - key: SESSION_TTL_MS
         value: "43200000"
 
+      # Encuesta de experiencia. Los valores reales se configuran únicamente en Render.
+      - key: EXPERIENCIA_WEBHOOK_URL
+        sync: false
+      - key: EXPERIENCIA_WEBHOOK_TOKEN
+        sync: false
+
       # Clave maestra para cifrar las contraseñas de usuarios creados desde el panel.
       # Debe tener mínimo 32 caracteres y mantenerse únicamente en Render.
       - key: BIOFILE_ENCRYPTION_KEY
