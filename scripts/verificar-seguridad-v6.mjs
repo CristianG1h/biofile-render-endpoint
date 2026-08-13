@@ -23,7 +23,8 @@ const pruebas = [
   ['eliminados restaurado', contenido.sheets.includes('ELIMINADOS_RESTAURADO_V61') && contenido.sheets.includes('marcarEliminadoFila')],
   ['manual por fila', contenido.sheets.includes('marcarCompletadoManualFila')],
   ['filtro histórico v6.2', contenido.sheets.includes('CORTE_HISTORICO_PENDIENTES_V62')],
-  ['hora Colombia preservada', contenido.sheets.includes('/* FECHA_LOCAL_COLOMBIA_V63 */') && contenido.sheets.includes("+ '-05:00'")]
+  ['hora Colombia preservada', contenido.sheets.includes('/* FECHA_LOCAL_COLOMBIA_V63 */') && contenido.sheets.includes("+ '-05:00'")],
+  ['conciliación segura v6.4', contenido.server.includes('/* CONCILIACION_BIOFILE_V64 */') && contenido.server.includes('/api/registros/verificar-biofile') && contenido.server.includes('CONCILIACION_BIOFILE')]
 ];
 
 const fallidas = pruebas.filter(([, ok]) => !ok);
