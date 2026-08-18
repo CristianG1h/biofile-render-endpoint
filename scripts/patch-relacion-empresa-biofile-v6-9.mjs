@@ -11,15 +11,29 @@ function reemplazarUna(texto, anterior, nuevo, etiqueta) {
   return texto.replace(anterior, nuevo);
 }
 
+function agregarColumnasControl(texto, columnas) {
+  const inicio = texto.indexOf('const COLUMNAS_CONTROL = [');
+  if (inicio < 0) throw new Error('No se encontró COLUMNAS_CONTROL de Google Sheets.');
+  const fin = texto.indexOf('\n];', inicio);
+  if (fin < 0) throw new Error('No se encontró el cierre de COLUMNAS_CONTROL.');
+  const bloque = texto.slice(inicio, fin);
+  const faltantes = columnas.filter((columna) => !bloque.includes(`'${columna}'`));
+  if (!faltantes.length) return texto;
+  const prefijo = /,\s*$/.test(bloque) ? '' : ',';
+  const agregado = prefijo + '\n' + faltantes.map((columna) => `  '${columna}'`).join(',\n');
+  return texto.slice(0, fin) + agregado + texto.slice(fin);
+}
+
 // ==================== GOOGLE SHEETS ====================
 let sheets = fs.readFileSync(sheetsPath, 'utf8');
 if (!sheets.includes(`/* ${MARCA}_SHEETS */`)) {
-  sheets = reemplazarUna(
-    sheets,
-    "  'MODO_INGRESO_BIOFILE'\n];",
-    "  'MODO_INGRESO_BIOFILE',\n  'ACUERDO_COMERCIAL_BIOFILE',\n  'EMPRESA_MISION_BIOFILE',\n  'ORIGEN_RELACION_EMPRESA'\n];\n\n/* RELACION_EMPRESA_BIOFILE_V69_SHEETS */",
-    'COLUMNAS_CONTROL de Google Sheets'
-  );
+  sheets = agregarColumnasControl(sheets, [
+    'ACUERDO_COMERCIAL_BIOFILE',
+    'EMPRESA_MISION_BIOFILE',
+    'ORIGEN_RELACION_EMPRESA'
+  ]);
+  const finColumnas = sheets.indexOf('\n];', sheets.indexOf('const COLUMNAS_CONTROL = ['));
+  sheets = sheets.slice(0, finColumnas + 3) + `\n\n/* ${MARCA}_SHEETS */` + sheets.slice(finColumnas + 3);
 
   sheets = reemplazarUna(
     sheets,
