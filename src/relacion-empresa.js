@@ -24,6 +24,42 @@ function claveEmpresa(valor) {
     .trim();
 }
 
+function claveComparableEmpresa(valor) {
+  return claveEmpresa(valor)
+    .replace(/\b(SAS|SA|LTDA|EU)\b/g, ' ')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function distanciaEdicion(a, b) {
+  a = String(a || '');
+  b = String(b || '');
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+  let anterior = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const actual = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const costo = a[i - 1] === b[j - 1] ? 0 : 1;
+      actual[j] = Math.min(actual[j - 1] + 1, anterior[j] + 1, anterior[j - 1] + costo);
+    }
+    anterior = actual;
+  }
+  return anterior[b.length];
+}
+
+function esMismoNombreProbable(a, b) {
+  const x = claveComparableEmpresa(a);
+  const y = claveComparableEmpresa(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const max = Math.max(x.length, y.length);
+  if (max < 8) return false;
+  const limite = Math.max(1, Math.min(2, Math.floor(max * 0.08)));
+  return distanciaEdicion(x, y) <= limite;
+}
+
 function valorValido(valor) {
   const clave = claveEmpresa(valor);
   return Boolean(clave) && ![
@@ -36,6 +72,16 @@ function valorValido(valor) {
 function agregarUnico(lista, valor, clave = (x) => x) {
   const k = clave(valor);
   if (!lista.some((item) => clave(item) === k)) lista.push(valor);
+}
+
+function canonizarParSimilar(par) {
+  if (!par?.acuerdo || !par?.empresaMision) return par;
+  if (!esMismoNombreProbable(par.acuerdo, par.empresaMision)) return par;
+  return {
+    ...par,
+    empresaMision: par.acuerdo,
+    fuente: par.fuente ? `${par.fuente}-nombre-equivalente` : 'nombre-equivalente'
+  };
 }
 
 export function construirIndiceRelaciones(relaciones = [], manifest = {}) {
@@ -166,6 +212,13 @@ function resolverAcuerdoExacto(indice, valor) {
   }
 
   if (item.misiones.length === 1) {
+    if (esMismoNombreProbable(item.acuerdo, item.misiones[0])) {
+      return {
+        acuerdo: item.acuerdo,
+        empresaMision: item.acuerdo,
+        fuente: 'acuerdo-unica-mision-nombre-equivalente'
+      };
+    }
     return {
       acuerdo: item.acuerdo,
       empresaMision: item.misiones[0],
@@ -187,14 +240,14 @@ function resolverMisionExacta(indice, valor) {
   if (!pares.length) return null;
 
   if (pares.length === 1) {
-    return { ...pares[0], fuente: 'mision-exacta' };
+    return canonizarParSimilar({ ...pares[0], fuente: 'mision-exacta' });
   }
 
   const self = pares.find((par) => claveEmpresa(par.acuerdo) === key);
-  if (self) return { ...self, fuente: 'mision-self' };
+  if (self) return canonizarParSimilar({ ...self, fuente: 'mision-self' });
 
   const acuerdosUnicos = new Set(pares.map((par) => claveEmpresa(par.acuerdo)));
-  if (acuerdosUnicos.size === 1) return { ...pares[0], fuente: 'mision-mismo-acuerdo' };
+  if (acuerdosUnicos.size === 1) return canonizarParSimilar({ ...pares[0], fuente: 'mision-mismo-acuerdo' });
 
   return { ambiguo: true, fuente: 'mision-ambigua' };
 }
@@ -215,10 +268,23 @@ export function resolverRelacionEnIndice(indice, {
     if (item) {
       const misionCanonica = item.misiones.find((m) => claveEmpresa(m) === claveEmpresa(misionTexto));
       if (misionCanonica) {
-        return {
+        return canonizarParSimilar({
           acuerdo: item.acuerdo,
           empresaMision: misionCanonica,
           fuente: 'par-explicito-validado'
+        });
+      }
+
+      // Caso como HUMAN: el Excel trae una única misión prácticamente igual al acuerdo
+      // pero con un error de digitación. Si el formulario envía el mismo acuerdo en ambos
+      // campos, se acepta como la representación canónica que debe seleccionarse en BIOFILE.
+      if (claveEmpresa(misionTexto) === claveEmpresa(item.acuerdo) &&
+          item.misiones.length === 1 &&
+          esMismoNombreProbable(item.acuerdo, item.misiones[0])) {
+        return {
+          acuerdo: item.acuerdo,
+          empresaMision: item.acuerdo,
+          fuente: 'par-explicito-nombre-equivalente'
         };
       }
     }
@@ -238,7 +304,7 @@ export function resolverRelacionEnIndice(indice, {
   if (empresaTexto) {
     const alias = indice.aliases.get(claveEmpresa(empresaTexto));
     if (alias) {
-      if (alias.empresaMision) return { ...alias, fuente: 'alias-especial' };
+      if (alias.empresaMision) return canonizarParSimilar({ ...alias, fuente: 'alias-especial' });
       const desdeAcuerdo = resolverAcuerdoExacto(indice, alias.acuerdo);
       if (desdeAcuerdo) return { ...desdeAcuerdo, fuente: 'alias-acuerdo' };
     }
@@ -316,4 +382,4 @@ export async function resolverRelacionEmpresaRegistro(registro, {
   }
 }
 
-export { claveEmpresa };
+export { claveEmpresa, esMismoNombreProbable };

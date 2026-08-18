@@ -5,7 +5,8 @@ const indice = construirIndiceRelaciones([
   ['TEMPORALES AVANZADOS SAS', 'RIVERPEZ INTERNATIONAL S.A.S'],
   ['GESTLAB S.A.S', 'GESTLAB S.A.S'],
   ['GESTLAB S.A.S', 'CANGURO INTERNATIONAL SAS'],
-  ['HUMAN RESOURCES MANAGMENT SA', 'HUMAN RESOURCES MANAGMENT SA'],
+  // Reproduce el dato real del catálogo V2.7: la misión tiene un error leve de digitación.
+  ['HUMAN RESOURCES MANAGMENT SA', 'HUMAN RESOURCES MANAGMENDT SA'],
   ['ACUERDO UNICO SAS', 'EMPRESA MISION UNICA SAS'],
   ['ACUERDO A SAS', 'MISION COMPARTIDA SAS'],
   ['ACUERDO B SAS', 'MISION COMPARTIDA SAS']
@@ -32,6 +33,27 @@ assert.deepEqual(
     acuerdo: 'GESTLAB S.A.S',
     empresaMision: 'GESTLAB S.A.S',
     fuente: 'acuerdo-self'
+  }
+);
+
+assert.deepEqual(
+  resolverRelacionEnIndice(indice, { acuerdo: 'HUMAN RESOURCES MANAGMENT SA' }),
+  {
+    acuerdo: 'HUMAN RESOURCES MANAGMENT SA',
+    empresaMision: 'HUMAN RESOURCES MANAGMENT SA',
+    fuente: 'acuerdo-unica-mision-nombre-equivalente'
+  }
+);
+
+assert.deepEqual(
+  resolverRelacionEnIndice(indice, {
+    acuerdo: 'HUMAN RESOURCES MANAGMENT SA',
+    empresaMision: 'HUMAN RESOURCES MANAGMENT SA'
+  }),
+  {
+    acuerdo: 'HUMAN RESOURCES MANAGMENT SA',
+    empresaMision: 'HUMAN RESOURCES MANAGMENT SA',
+    fuente: 'par-explicito-nombre-equivalente'
   }
 );
 
@@ -66,4 +88,4 @@ assert.equal(
   null
 );
 
-console.log('[TEST] Relación empresarial v6.9 validada.');
+console.log('[TEST] Relación empresarial v6.9 validada, incluido HUMAN con typo equivalente.');
