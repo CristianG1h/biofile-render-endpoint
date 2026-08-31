@@ -35,6 +35,7 @@ const catalogoStore = new CatalogoPaquetesBiofileStore({
 });
 const investigacionesCatalogo = new Map();
 let colaGlobalCatalogo = Promise.resolve();
+const CATALOGO_REINTENTO_ERROR_MS = Number(process.env.BIOFILE_CATALOG_ERROR_RETRY_MS || 15 * 60 * 1000);
 
 function usuarioCatalogoAutomatico() {
   const usuarioDirecto = String(process.env.BIOFILE_CATALOG_USER || '').trim();
@@ -64,10 +65,15 @@ function programarInvestigacionCatalogo(empresa, { force = false, usuarioPreferi
 
   const activa = investigacionesCatalogo.get(clave);
   if (activa) return activa;
+  if (investigacionesCatalogo.size >= 25) {
+    return Promise.reject(new Error('La cola de actualización del catálogo está temporalmente llena.'));
+  }
 
   const ejecutar = async () => {
     const actual = await catalogoStore.obtener(nombre).catch(() => null);
-    if (actual?.fresca && !force) return actual;
+    const errorReciente = String(actual?.estado || '').toUpperCase() === 'ERROR' &&
+      Date.now() - (Date.parse(actual?.ultimaRevisionIso || '') || 0) < CATALOGO_REINTENTO_ERROR_MS;
+    if ((actual?.fresca || errorReciente) && !force) return actual;
 
     const usuario = usuarioPreferido?.usuario && usuarioPreferido?.contrasena
       ? usuarioPreferido
@@ -178,7 +184,9 @@ function precargarCatalogoSinEsperar(empresa, opciones = {}) {
     }
 
     const catalogo = await catalogoStore.obtener(empresa);
-    const actualizando = !catalogo?.fresca;
+    const errorReciente = String(catalogo?.estado || '').toUpperCase() === 'ERROR' &&
+      Date.now() - (Date.parse(catalogo?.ultimaRevisionIso || '') || 0) < CATALOGO_REINTENTO_ERROR_MS;
+    const actualizando = !catalogo?.fresca && !errorReciente;
     if (actualizando) precargarCatalogoSinEsperar(empresa, { usuarioPreferido: usuario });
 
     responderJson(req, res, 200, {
