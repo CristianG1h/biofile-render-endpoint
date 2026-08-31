@@ -314,8 +314,15 @@ export class CatalogoPaquetesBiofileStore {
     if (cache && Date.now() - cache.cargadoEn < CACHE_LECTURA_MS) return cache.catalogo;
 
     const { empresas, paquetes } = await this.#leerTodo();
-    const catalogo = this.#armarCatalogo(clave, empresas, paquetes);
+    const empresaEncontrada = empresas.find((x) =>
+      x.clave === clave ||
+      claveEmpresaCatalogo(x.empresaBuscada) === clave ||
+      claveEmpresaCatalogo(x.acuerdoExacto) === clave
+    );
+    const claveReal = empresaEncontrada?.clave || clave;
+    const catalogo = this.#armarCatalogo(claveReal, empresas, paquetes);
     this.cache.set(clave, { cargadoEn: Date.now(), catalogo });
+    if (claveReal !== clave) this.cache.set(claveReal, { cargadoEn: Date.now(), catalogo });
     return catalogo;
   }
 
