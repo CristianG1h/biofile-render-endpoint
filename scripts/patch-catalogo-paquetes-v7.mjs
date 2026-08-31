@@ -34,6 +34,7 @@ const catalogoStore = new CatalogoPaquetesBiofileStore({
   ttlMs: Number(process.env.BIOFILE_CATALOG_TTL_MS || 24 * 60 * 60 * 1000)
 });
 const investigacionesCatalogo = new Map();
+let colaGlobalCatalogo = Promise.resolve();
 
 function usuarioCatalogoAutomatico() {
   const usuarioDirecto = String(process.env.BIOFILE_CATALOG_USER || '').trim();
@@ -64,7 +65,7 @@ function programarInvestigacionCatalogo(empresa, { force = false, usuarioPreferi
   const activa = investigacionesCatalogo.get(clave);
   if (activa) return activa;
 
-  const promesa = (async () => {
+  const ejecutar = async () => {
     const actual = await catalogoStore.obtener(nombre).catch(() => null);
     if (actual?.fresca && !force) return actual;
 
@@ -88,7 +89,13 @@ function programarInvestigacionCatalogo(empresa, { force = false, usuarioPreferi
       estado: 'OK',
       error: ''
     });
-  })()
+  };
+
+  // Las investigaciones se serializan globalmente. Así un formulario público
+  // no puede abrir decenas de navegadores BIOFILE al mismo tiempo.
+  const promesa = colaGlobalCatalogo
+    .catch(() => {})
+    .then(ejecutar)
     .catch(async (error) => {
       console.error('[CATALOGO] Error investigando "' + nombre + '":', error.message);
       await catalogoStore.guardarError(nombre, error).catch(() => {});
@@ -98,6 +105,7 @@ function programarInvestigacionCatalogo(empresa, { force = false, usuarioPreferi
       if (investigacionesCatalogo.get(clave) === promesa) investigacionesCatalogo.delete(clave);
     });
 
+  colaGlobalCatalogo = promesa.catch(() => {});
   investigacionesCatalogo.set(clave, promesa);
   return promesa;
 }
