@@ -301,7 +301,7 @@ export class CatalogoPaquetesBiofileStore {
       proximaRevisionIso: empresa.proximaRevisionIso || '',
       estado: empresa.estado || '',
       error: empresa.error || '',
-      fresca: Boolean(revisada && Date.now() - revisada < this.ttlMs),
+      fresca: normalizar(empresa.estado) === 'OK' && Boolean(revisada && Date.now() - revisada < this.ttlMs),
       paquetes: activos
     };
   }
