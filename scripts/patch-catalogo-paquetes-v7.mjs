@@ -214,7 +214,7 @@ function precargarCatalogoSinEsperar(empresa, opciones = {}) {
         responderJson(req, res, 400, { ok: false, error: 'Para usar un paquete debes indicar la empresa/acuerdo comercial.' });
         return;
       }
-      const validacionPaquete = await catalogoStore.valididarPaquete(empresaCatalogo, tipoEvaluacion, paquete);
+      const validacionPaquete = await catalogoStore.validarPaquete(empresaCatalogo, tipoEvaluacion, paquete);
       if (!validacionPaquete.ok) {
         responderJson(req, res, 409, { ok: false, error: validacionPaquete.error });
         return;
