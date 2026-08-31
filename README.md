@@ -2,7 +2,7 @@
 
 Backend de **VIP Salud Ocupacional** para automatizar el ingreso de pacientes a BIOFILE a partir de Google Sheets. Está desarrollado en **Node.js + Playwright**, se ejecuta en Render y trabaja junto con el repositorio `panel-gestion-biofile-vip`.
 
-> **Documentación actualizada: 12 de agosto de 2026.**
+> **Documentación actualizada: 31 de agosto de 2026.**
 
 ## Qué hace actualmente
 
@@ -107,6 +107,28 @@ DETALLE
 | `GET` | `/api/health` | Health check utilizado por Render. |
 
 La API también conserva compatibilidad temporal con integraciones antiguas que usaban API key, pero el panel actual trabaja con sesiones Bearer.
+
+## Catálogo de paquetes BIOFILE
+
+El backend mantiene un catálogo persistente por empresa para evitar consultar **Acuerdos Comerciales** en cada ingreso.
+
+- Investiga el acuerdo comercial y sus paquetes directamente en BIOFILE mediante Playwright.
+- Relaciona cada paquete con el tipo de evaluación médica configurado en **Producto o Servicio**.
+- Conserva el catálogo en las hojas `CATALOGO_EMPRESAS_BIOFILE` y `CATALOGO_PAQUETES_BIOFILE`.
+- Revisa nuevamente una empresa después de 24 horas y conserva el último catálogo válido mientras actualiza.
+- Los paquetes que desaparecen de BIOFILE quedan marcados como inactivos, sin perder trazabilidad.
+- Las investigaciones se ejecutan en una cola global para no abrir múltiples navegadores de catálogo simultáneamente.
+- Un error reciente tiene un periodo de enfriamiento antes de reintentarse para evitar ciclos continuos.
+
+El panel puede usar estos endpoints:
+
+| Método | Endpoint | Uso |
+|---|---|---|
+| `POST` | `/api/catalogo/precargar` | Dispara en segundo plano la investigación de una empresa recién registrada. |
+| `GET` | `/api/catalogo/empresa?empresa=...` | Devuelve acuerdo exacto, paquetes, tipos y estado de frescura. |
+| `POST` | `/api/catalogo/refrescar` | Fuerza una actualización desde BIOFILE para un usuario autenticado. |
+
+Los tipos admitidos para la orden son exactamente: **Ingreso, Periódico, Egreso y Post Incapacidad** según los textos de BIOFILE. Si no se selecciona un paquete válido, el flujo conserva `NO APLICA`.
 
 ## Progreso detallado de trabajos
 
