@@ -299,6 +299,11 @@ if (!procesar.includes('/* ' + MARCA + '_PROCESAR */')) {
     }
     defaults.tipoEvaluacion = tipoEvaluacionSeleccionado;
     defaults.paquete = String(paquete || 'NO APLICA').trim() || 'NO APLICA';
+    if (String(empresaCatalogo || '').trim()) {
+      // El acuerdo exacto que validó el catálogo debe ser el mismo sobre el cual
+      // BIOFILE seleccionará el paquete.
+      defaults.acuerdo = String(empresaCatalogo).trim();
+    }
 
     logger.info('Tipo de evaluación y paquete preparados para la orden.', {
       empresaPanel: empresaCatalogo || '',
