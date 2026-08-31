@@ -61,10 +61,11 @@ async function controlCercaDeEtiqueta(page, etiqueta) {
           .join(' ');
         const texto = norm(propio || el.textContent);
         const calidad = texto === objetivo ? 0 : texto.startsWith(objetivo) ? 1 : objetivo.startsWith(texto) ? 2 : 99;
-        return { el, texto, calidad };
+        const modal = el.closest('[role="dialog"],.modal,.ui-dialog,[class*="modal" i],[class*="dialog" i]') ? 0 : 1;
+        return { el, texto, calidad, modal };
       })
       .filter((x) => x.calidad < 99)
-      .sort((a, b) => a.calidad - b.calidad || a.el.childElementCount - b.el.childElementCount || a.texto.length - b.texto.length);
+      .sort((a, b) => a.modal - b.modal || a.calidad - b.calidad || a.el.childElementCount - b.el.childElementCount || a.texto.length - b.texto.length);
 
     const describir = (el) => el ? {
       id: el.id || '',
@@ -331,23 +332,18 @@ export async function investigarPaquetesEmpresaBiofile({
     await page.waitForTimeout(900);
     await esperarProcesamiento(page);
 
-    let campoBusqueda = null;
-    try {
-      campoBusqueda = await controlCercaDeEtiqueta(page, 'Nombre del Acuerdo Comercial, Contrato o Convenio');
-    } catch {
-      if (!await clickBuscarVisible(page, false)) {
-        throw new Error('No se encontró el botón Buscar de Acuerdos Comerciales.');
-      }
-      await page.waitForTimeout(500);
-      await esperarProcesamiento(page);
-      campoBusqueda = await controlCercaDeEtiqueta(page, 'Nombre del Acuerdo Comercial, Contrato o Convenio');
+    // BIOFILE exige abrir primero el modal Buscar; el campo de la pantalla principal
+    // no sirve para filtrar acuerdos existentes.
+    if (!await clickBuscarVisible(page, false)) {
+      throw new Error('No se encontró el botón Buscar de Acuerdos Comerciales.');
     }
+    await page.waitForTimeout(500);
+    await esperarProcesamiento(page);
 
-    if (!await campoBusqueda.isVisible().catch(() => false)) {
-      await clickBuscarVisible(page, false);
-      await page.waitForTimeout(400);
-      campoBusqueda = await controlCercaDeEtiqueta(page, 'Nombre del Acuerdo Comercial, Contrato o Convenio');
-    }
+    const campoBusqueda = await controlCercaDeEtiqueta(
+      page,
+      'Nombre del Acuerdo Comercial, Contrato o Convenio'
+    );
 
     await campoBusqueda.click({ clickCount: 3 });
     await campoBusqueda.fill('');
