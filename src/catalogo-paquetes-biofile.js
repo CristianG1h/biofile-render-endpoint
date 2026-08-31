@@ -448,7 +448,7 @@ export class CatalogoPaquetesBiofileStore {
         }
       }
 
-      this.cache.delete(clave);
+      this.cache.clear();
       return this.obtener(empresaBuscada || acuerdoExacto);
     };
 
