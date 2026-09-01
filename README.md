@@ -110,10 +110,12 @@ La API también conserva compatibilidad temporal con integraciones antiguas que 
 
 ## Catálogo de paquetes BIOFILE
 
-El backend mantiene un catálogo persistente por empresa para evitar consultar **Acuerdos Comerciales** en cada ingreso.
+El backend mantiene un catálogo persistente por empresa para no investigar BIOFILE en cada ingreso.
 
-- Investiga el acuerdo comercial y sus paquetes directamente en BIOFILE mediante Playwright.
-- Relaciona cada paquete con el tipo de evaluación médica configurado en **Producto o Servicio**.
+- Usa el formulario estable de **Órdenes de Servicio**, selecciona el acuerdo y consulta el WebMethod real de cada autocompletado.
+- Pregunta por separado los tipos **Ingreso, Periódico, Egreso y Post Incapacidad**, de modo que cada paquete queda asociado con el tipo para el cual BIOFILE lo devuelve.
+- No depende del botón modal de búsqueda de **Acuerdos Comerciales**, que no se comporta de forma estable en navegadores headless.
+- También registra en el diagnóstico las Empresas en Misión que BIOFILE devuelve para el acuerdo.
 - Conserva el catálogo en las hojas `CATALOGO_EMPRESAS_BIOFILE` y `CATALOGO_PAQUETES_BIOFILE`.
 - Revisa nuevamente una empresa después de 24 horas y conserva el último catálogo válido mientras actualiza.
 - Los paquetes que desaparecen de BIOFILE quedan marcados como inactivos, sin perder trazabilidad.

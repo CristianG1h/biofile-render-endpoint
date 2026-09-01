@@ -1,528 +1,22 @@
 import path from 'node:path';
 import { configParaUsuario } from './config.js';
 import { crearSesion } from './browser.js';
+import { BiofileClient } from './biofile.js';
 import { crearLogger } from './logger.js';
 import { asegurarDirectorio, normalizar } from './util.js';
-import {
-  TIPOS_EVALUACION_BIOFILE,
-  normalizarTipoEvaluacion
-} from './catalogo-paquetes-biofile.js';
+import { TIPOS_EVALUACION_BIOFILE } from './catalogo-paquetes-biofile.js';
 
-const ACUERDOS_URL = process.env.BIOFILE_ACUERDOS_URL ||
-  'https://vipso.biofile.com.co/Factura/AcuerdosComerciales.aspx';
-
-function escapeRegex(valor) {
-  return String(valor).replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
-}
-
-async function visible(locator) {
-  try {
-    return (await locator.count()) > 0 && await locator.first().isVisible();
-  } catch {
-    return false;
-  }
-}
-
-async function esperarProcesamiento(page, timeoutMs = 12000) {
-  const limite = Date.now() + timeoutMs;
-  let vio = false;
-  while (Date.now() < limite) {
-    const ocupado = await page.evaluate(() => {
-      const esVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-      return [...document.querySelectorAll('div,span,p,td,strong')].some((el) => {
-        if (!esVisible(el)) return false;
-        const texto = String(el.textContent || '').trim().replace(/\s+/g, ' ');
-        return texto.length < 100 && /^(procesando datos|procesando|cargando)(\.{0,3})$/i.test(texto);
-      });
-    }).catch(() => false);
-
-    if (!ocupado) {
-      if (vio) await page.waitForTimeout(250);
-      return;
-    }
-    vio = true;
-    await page.waitForTimeout(150);
-  }
-}
-
-async function controlCercaDeEtiqueta(page, etiqueta) {
-  const descriptor = await page.evaluate(({ etiqueta }) => {
-    const norm = (v) => String(v || '')
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9]+/g, ' ').trim().toUpperCase();
-    const objetivo = norm(etiqueta);
-    const esVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-    const nodos = [...document.querySelectorAll('label,span,div,td,p,strong')]
-      .filter(esVisible)
-      .map((el) => {
-        const propio = [...el.childNodes]
-          .filter((n) => n.nodeType === Node.TEXT_NODE)
-          .map((n) => n.textContent)
-          .join(' ');
-        const texto = norm(propio || el.textContent);
-        const calidad = texto === objetivo ? 0 : texto.startsWith(objetivo) ? 1 : objetivo.startsWith(texto) ? 2 : 99;
-        const modal = el.closest('[role="dialog"],.modal,.ui-dialog,[class*="modal" i],[class*="dialog" i]') ? 0 : 1;
-        return { el, texto, calidad, modal };
-      })
-      .filter((x) => x.calidad < 99)
-      .sort((a, b) => a.modal - b.modal || a.calidad - b.calidad || a.el.childElementCount - b.el.childElementCount || a.texto.length - b.texto.length);
-
-    const describir = (el) => el ? {
-      id: el.id || '',
-      name: el.getAttribute('name') || '',
-      tag: el.tagName
-    } : null;
-
-    for (const candidato of nodos) {
-      const etiquetaEl = candidato.el;
-      if (etiquetaEl.tagName === 'LABEL' && etiquetaEl.htmlFor) {
-        const asociado = document.getElementById(etiquetaEl.htmlFor);
-        if (asociado && esVisible(asociado)) return describir(asociado);
-      }
-
-      const dentro = etiquetaEl.querySelector?.('input:not([type="hidden"]),select,textarea');
-      if (dentro && esVisible(dentro)) return describir(dentro);
-
-      let hermano = etiquetaEl.nextElementSibling;
-      while (hermano) {
-        if (hermano.matches?.('input:not([type="hidden"]),select,textarea') && esVisible(hermano)) return describir(hermano);
-        const interno = hermano.querySelector?.('input:not([type="hidden"]),select,textarea');
-        if (interno && esVisible(interno)) return describir(interno);
-        hermano = hermano.nextElementSibling;
-      }
-
-      const contenedor = etiquetaEl.closest('td,div,tr');
-      const controles = [...(contenedor?.querySelectorAll?.('input:not([type="hidden"]),select,textarea') || [])].filter(esVisible);
-      if (controles.length) return describir(controles[0]);
-    }
-    return null;
-  }, { etiqueta });
-
-  if (!descriptor) throw new Error('No se encontró el campo "' + etiqueta + '" en Acuerdos Comerciales.');
-  if (descriptor.id) return page.locator('[id="' + descriptor.id.replace(/"/g, '\\"') + '"]').first();
-  if (descriptor.name) return page.locator('[name="' + descriptor.name.replace(/"/g, '\\"') + '"]').first();
-  throw new Error('El campo "' + etiqueta + '" no tiene id ni name.');
-}
-
-async function clickBuscarVisible(page, preferirUltimo = false) {
-  const candidatos = [
-    // Botón real de la barra superior de Acuerdos Comerciales.
-    page.locator('#B_BH_BtnBuscar'),
-    page.locator('input[type="image"][id$="_BtnBuscar"]'),
-    page.locator('input[type="image"][src*="BtnBuscarEnabled" i]'),
-    page.getByRole('button', { name: /Buscar/i }),
-    page.locator('input[type="button"][value*="Buscar" i], input[type="submit"][value*="Buscar" i]'),
-    page.locator('[title*="Buscar" i], [alt*="Buscar" i]')
-  ];
-
-  for (const grupo of candidatos) {
-    const cantidad = await grupo.count().catch(() => 0);
-    const indices = preferirUltimo
-      ? Array.from({ length: cantidad }, (_, i) => cantidad - 1 - i)
-      : Array.from({ length: cantidad }, (_, i) => i);
-    for (const i of indices) {
-      const loc = grupo.nth(i);
-      if (await loc.isVisible().catch(() => false)) {
-        await loc.click({ force: true });
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-async function esperarModalAcuerdos(page, timeoutMs = 18000) {
-  const limite = Date.now() + timeoutMs;
-  while (Date.now() < limite) {
-    const modal = page.locator('.VentanaModal-Cuerpo').last();
-    if (await visible(modal)) return modal;
-
-    // Algunas versiones de BIOFILE pintan primero el contenedor y luego la clase.
-    const campoModal = page.locator(
-      '.VentanaModal-Contenido input:visible, .VentanaModal-Contenido select:visible, ' +
-      '[class*="VentanaModal" i] input:visible, [class*="VentanaModal" i] select:visible'
-    ).first();
-    if (await visible(campoModal)) {
-      const contenedor = campoModal.locator('xpath=ancestor::*[contains(@class,"VentanaModal")][1]');
-      if (await visible(contenedor)) return contenedor;
-    }
-
-    await page.waitForTimeout(250);
-  }
-  return null;
-}
-
-async function clickFisico(locator, page) {
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
-  const box = await locator.boundingBox().catch(() => null);
-  if (!box) return false;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(70);
-  await page.mouse.up();
-  return true;
-}
-
-async function abrirBuscadorAcuerdos(page) {
-  const input = page.locator('#B_BH_BtnBuscar');
-  const td = page.locator('#B_BH_TdBuscar');
-
-  if (!await visible(input) && !await visible(td)) {
-    throw new Error(
-      'No se encontró el control Buscar de Acuerdos Comerciales. ' +
-      'Se esperaban #B_BH_BtnBuscar o #B_BH_TdBuscar.'
-    );
-  }
-
-  const probarModal = async (espera = 7000) => {
-    const modal = await esperarModalAcuerdos(page, espera);
-    if (modal) return modal;
-    await page.waitForLoadState('domcontentloaded', { timeout: 2500 }).catch(() => {});
-    return esperarModalAcuerdos(page, 2500);
-  };
-
-  // 1) Clic físico exactamente sobre el INPUT type=image. Antes se priorizaba
-  // el TD contenedor, pero ese TD no tiene onclick en el DOM real de BIOFILE.
-  if (await visible(input)) {
-    await clickFisico(input, page).catch(() => false);
-    let modal = await probarModal(7000);
-    if (modal) return modal;
-
-    // 2) Click normal de Playwright sobre el submitter real.
-    await input.click({ timeout: 5000 }).catch(() => {});
-    modal = await probarModal(5000);
-    if (modal) return modal;
-
-    // 3) requestSubmit(input): importante para input type=image / ASP.NET WebForms,
-    // porque conserva el submitter y permite que el formulario envíe BtnBuscar.x/y.
-    await input.evaluate((el) => {
-      const form = el.form;
-      if (!form) return;
-      if (typeof form.requestSubmit === 'function') {
-        form.requestSubmit(el);
-      }
-    }).catch(() => {});
-    modal = await probarModal(7000);
-    if (modal) return modal;
-
-    // 4) Simular explícitamente las coordenadas de un input type=image y enviar
-    // el formulario nativo. Este es el patrón que ASP.NET reconoce cuando el
-    // servidor espera ctl00$...$BtnBuscar.x / .y.
-    await input.evaluate((el) => {
-      const form = el.form;
-      const name = el.getAttribute('name') || '';
-      if (!form || !name) return;
-
-      const agregar = (n, v) => {
-        let h = form.querySelector('input[type="hidden"][data-biofile-temp="' + n.replace(/"/g, '\\"') + '"]');
-        if (!h) {
-          h = document.createElement('input');
-          h.type = 'hidden';
-          h.dataset.biofileTemp = n;
-          h.name = n;
-          form.appendChild(h);
-        }
-        h.value = v;
-      };
-
-      agregar(name + '.x', '8');
-      agregar(name + '.y', '8');
-
-      const submitNativo = HTMLFormElement.prototype.submit;
-      submitNativo.call(form);
-    }).catch(() => {});
-    modal = await probarModal(9000);
-    if (modal) return modal;
-  }
-
-  // 5) Último recurso: __doPostBack con el UniqueID del control, si BIOFILE
-  // lo expone. No todas las pantallas lo usan para botones tipo image.
-  const postback = await page.evaluate(() => {
-    const el = document.querySelector('#B_BH_BtnBuscar');
-    const target = el?.getAttribute('name') || '';
-    if (!target || typeof window.__doPostBack !== 'function') return false;
-    window.__doPostBack(target, '');
-    return true;
-  }).catch(() => false);
-
-  if (postback) {
-    const modal = await probarModal(9000);
-    if (modal) return modal;
-  }
-
-  const diagnostico = await page.evaluate(() => {
-    const tdEl = document.querySelector('#B_BH_TdBuscar');
-    const inputEl = document.querySelector('#B_BH_BtnBuscar');
-    const form = inputEl?.form;
-    const prm = window.Sys?.WebForms?.PageRequestManager?.getInstance?.();
-    return {
-      readyState: document.readyState,
-      url: location.href,
-      tdExiste: Boolean(tdEl),
-      tdClase: tdEl?.className || '',
-      tdOnclick: tdEl?.getAttribute('onclick') || '',
-      inputExiste: Boolean(inputEl),
-      inputTipo: inputEl?.getAttribute('type') || '',
-      inputName: inputEl?.getAttribute('name') || '',
-      inputSrc: inputEl?.getAttribute('src') || '',
-      inputOnclick: inputEl?.getAttribute('onclick') || '',
-      formExiste: Boolean(form),
-      formAction: form?.getAttribute('action') || '',
-      doPostBack: typeof window.__doPostBack === 'function',
-      aspNetAjax: Boolean(prm)
-    };
-  }).catch(() => ({}));
-
-  const error = new Error(
-    'BIOFILE no abrió la ventana de búsqueda después de probar el submit real de WebForms. ' +
-    'Diagnóstico: ' + JSON.stringify(diagnostico)
-  );
-  error.detalleCatalogo = { paso: 'ABRIR_BUSCADOR_ACUERDOS', diagnostico };
-  throw error;
-}
-
-async function ejecutarBusquedaModalAcuerdos(page, campoBusqueda) {
-  const candidatos = [
-    // En la ventana modal BIOFILE el botón de búsqueda es realmente un TD
-    // con onclick="return BuscarVacio();" y clase BHEnabledBuscar.
-    page.locator('.VentanaModal-Cuerpo td.BHEnabledBuscar[onclick*="BuscarVacio"]').last(),
-    page.locator('.VentanaModal-Cuerpo [onclick*="BuscarVacio"]').last(),
-    page.locator('.VentanaModal-Cuerpo input[type="image"][src*="BtnBuscar" i]').last(),
-    page.locator('.VentanaModal-Cuerpo input[type="image"]').last()
-  ];
-
-  for (const loc of candidatos) {
-    if (await visible(loc)) {
-      await loc.click({ force: true });
-      return true;
-    }
-  }
-
-  await campoBusqueda.press('Enter').catch(() => {});
-  return false;
-}
-
-function extraerNombresRespuesta(data) {
-  const nombres = [];
-  const agregar = (valor) => {
-    const texto = String(valor || '').trim();
-    if (!texto) return;
-    if (!nombres.some((x) => normalizar(x) === normalizar(texto))) nombres.push(texto);
-  };
-
-  const recorrer = (valor) => {
-    if (valor === null || valor === undefined) return;
-    if (Array.isArray(valor)) {
-      valor.forEach(recorrer);
-      return;
-    }
-    if (typeof valor === 'string') {
-      const s = valor.trim();
-      if (!s) return;
-      if ((s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'))) {
-        try {
-          recorrer(JSON.parse(s));
-          return;
-        } catch {}
-      }
-      return;
-    }
-    if (typeof valor === 'object') {
-      if ('First' in valor) agregar(valor.First);
-      if ('Second' in valor && !valor.First) agregar(valor.Second);
-      if ('first' in valor) agregar(valor.first);
-      if ('second' in valor && !valor.first) agregar(valor.second);
-      Object.entries(valor).forEach(([k, v]) => {
-        if (!['First', 'Second', 'first', 'second'].includes(k)) recorrer(v);
-      });
-    }
-  };
-
-  recorrer(data);
-  return nombres;
-}
-
-async function sugerenciasVisibles(page) {
-  return page.evaluate(() => {
-    const visible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-    const selectores = [
-      '[role="option"]',
-      '.ajax__autocomplete_item',
-      '.ajax__autocomplete_highlighted_item',
-      '[class*="autocomplete" i] li',
-      '[id*="completion" i] li',
-      '[id*="autocomplete" i] li'
-    ];
-    const textos = [];
-    for (const selector of selectores) {
-      for (const el of document.querySelectorAll(selector)) {
-        if (!visible(el)) continue;
-        const t = String(el.textContent || '').trim().replace(/\s+/g, ' ');
-        if (t && t.length < 180 && !textos.includes(t)) textos.push(t);
-      }
-    }
-    return textos;
-  }).catch(() => []);
-}
-
-async function obtenerSugerenciasAutocomplete(page, input, timeoutMs = 5000) {
-  const respuestas = [];
-  const listener = async (response) => {
-    try {
-      const tipo = String(response.headers()['content-type'] || '');
-      if (!/json|javascript/i.test(tipo)) return;
-      const data = await response.json().catch(() => null);
-      if (data) respuestas.push(...extraerNombresRespuesta(data));
-    } catch {}
-  };
-  page.on('response', listener);
-
-  try {
-    await input.scrollIntoViewIfNeeded().catch(() => {});
-    await input.click({ clickCount: 3 });
-    await input.fill('').catch(() => {});
-    await page.waitForTimeout(250);
-
-    const limite = Date.now() + timeoutMs;
-    while (Date.now() < limite) {
-      const visuales = await sugerenciasVisibles(page);
-      const combinadas = [...respuestas, ...visuales]
-        .map((x) => String(x || '').trim())
-        .filter(Boolean)
-        .filter((x, i, arr) => arr.findIndex((y) => normalizar(y) === normalizar(x)) === i);
-      if (combinadas.length) return combinadas;
-      await page.waitForTimeout(180);
-    }
-    return [];
-  } finally {
-    page.off('response', listener);
-  }
-}
-
-async function seleccionarSugerencia(page, input, texto) {
-  await input.click({ clickCount: 3 }).catch(() => {});
-  await input.fill('');
-  await input.pressSequentially(String(texto), { delay: 18 });
-  await page.waitForTimeout(350);
-
-  const exacta = page.getByText(new RegExp('^\\s*' + escapeRegex(texto) + '\\s*$', 'i'));
-  const cantidad = await exacta.count().catch(() => 0);
-  for (let i = 0; i < cantidad; i += 1) {
-    const item = exacta.nth(i);
-    if (await item.isVisible().catch(() => false)) {
-      await item.click({ force: true });
-      await page.waitForTimeout(220);
-      await esperarProcesamiento(page);
-      await input.press('Tab').catch(() => {});
-      return;
-    }
-  }
-
-  await input.press('ArrowDown').catch(() => {});
-  await input.press('Enter').catch(() => {});
-  await page.waitForTimeout(220);
-  await esperarProcesamiento(page);
-  await input.press('Tab').catch(() => {});
-  const final = String(await input.inputValue().catch(() => '')).trim();
-  if (normalizar(final) !== normalizar(texto)) {
-    throw new Error('No se pudo seleccionar exactamente el paquete "' + texto + '". Resultado: "' + final + '".');
-  }
-}
-
-async function leerTiposProductoServicio(page) {
-  const control = await controlCercaDeEtiqueta(page, 'Producto o Servicio');
-  const tag = await control.evaluate((el) => el.tagName.toUpperCase());
-
-  let textos = [];
-  if (tag === 'SELECT') {
-    textos = await control.locator('option').allTextContents();
-  } else {
-    textos = await obtenerSugerenciasAutocomplete(page, control, 1200);
-  }
-
-  const tipos = [];
-  for (const texto of textos) {
-    const tipo = normalizarTipoEvaluacion(texto);
-    if (tipo && !tipos.some((x) => normalizar(x) === normalizar(tipo))) tipos.push(tipo);
-  }
-  return {
-    tipos,
-    textos: textos.map((x) => String(x || '').trim()).filter(Boolean)
-  };
-}
-
-async function esperarTiposProductoServicio(page, {
-  paquete = '',
-  timeoutMs = 10000
-} = {}) {
-  const limite = Date.now() + timeoutMs;
-  let ultimo = { tipos: [], textos: [] };
-
-  // BIOFILE llena "Producto o Servicio" mediante AJAX después de seleccionar
-  // el paquete. El overlay "Procesando datos..." no siempre alcanza a aparecer.
-  while (Date.now() < limite) {
-    await esperarProcesamiento(page, 1200).catch(() => {});
-    ultimo = await leerTiposProductoServicio(page).catch(() => ultimo);
-    if (ultimo.tipos.length) return ultimo;
-    await page.waitForTimeout(300);
-  }
-
-  const error = new Error(
-    'BIOFILE mostró el paquete "' + paquete +
-    '", pero no terminó de cargar un Tipo de Evaluación en "Producto o Servicio".'
-  );
-  error.detalleProductoServicio = ultimo;
-  throw error;
-}
-
-async function encontrarFilaEmpresa(page, empresa) {
-  const buscada = normalizar(empresa);
-  const grupos = [
-    page.locator('.VentanaModal-Cuerpo tr'),
-    page.locator('tr')
-  ];
-
-  for (const filas of grupos) {
-    const cantidad = await filas.count();
-    let mejor = null;
-    for (let i = 0; i < cantidad; i += 1) {
-      const fila = filas.nth(i);
-      if (!await fila.isVisible().catch(() => false)) continue;
-      const texto = normalizar(await fila.innerText().catch(() => ''));
-      if (!texto) continue;
-      if (texto.includes(buscada)) return fila;
-      if (!mejor && buscada.length >= 16 && texto.includes(buscada.slice(0, Math.min(40, buscada.length)))) mejor = fila;
-    }
-    if (mejor) return mejor;
-  }
-  return null;
-}
-
-async function acuerdoDesdePantalla(page, fallback) {
-  try {
-    const control = await controlCercaDeEtiqueta(page, 'Nombre del Acuerdo Comercial, Contrato o Convenio');
-    const valor = String(await control.inputValue().catch(() => '')).trim();
-    return valor || fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-export async function investigarPaquetesEmpresaBiofile({
-  empresa,
-  usuario,
-  loggerExterno
-}) {
+/**
+ * Obtiene paquetes usando los autocompletados reales del formulario de
+ * órdenes. Así no depende del modal WebForms de Acuerdos Comerciales.
+ */
+export async function investigarPaquetesEmpresaBiofile({ empresa, usuario, loggerExterno }) {
   const empresaBuscada = String(empresa || '').trim();
   if (!empresaBuscada) throw new Error('La empresa es obligatoria para investigar paquetes.');
   if (!usuario?.usuario || !usuario?.contrasena) {
     throw new Error('No hay un usuario BIOFILE disponible para investigar paquetes.');
   }
-
-  const usuarioCatalogo = {
-    ...usuario,
-    id: 'catalogo_' + (usuario.id || usuario.usuario)
-  };
+  const usuarioCatalogo = { ...usuario, id: 'catalogo_' + (usuario.id || usuario.usuario) };
   const configUsuario = configParaUsuario(usuarioCatalogo);
   configUsuario.paths.screenshots = path.join(configUsuario.paths.screenshots, 'catalogo');
   asegurarDirectorio(configUsuario.paths.logs);
@@ -531,161 +25,52 @@ export async function investigarPaquetesEmpresaBiofile({
 
   let sesion;
   try {
-    logger.info('Iniciando investigación de paquetes en Acuerdos Comerciales.', {
-      empresa: empresaBuscada,
-      usuario: usuario.usuario
+    logger.info('Iniciando investigación desde el formulario de órdenes BIOFILE.', {
+      empresa: empresaBuscada, usuario: usuario.usuario
     });
-
     sesion = await crearSesion(configUsuario, logger);
     await sesion.asegurarLogin();
-    const page = sesion.page;
-
-    await page.goto(ACUERDOS_URL, { waitUntil: 'domcontentloaded' });
-    await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-    await page.waitForFunction(() => document.readyState === 'complete', null, { timeout: 15000 }).catch(() => {});
-    await page.locator('#B_BH_TdBuscar, #B_BH_BtnBuscar').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(1200);
-    await esperarProcesamiento(page);
-
-    // Flujo real confirmado en el DOM de BIOFILE:
-    // 1. botón superior #B_BH_BtnBuscar
-    // 2. modal .VentanaModal-Cuerpo
-    // 3. buscar con TD.BHEnabledBuscar onclick=BuscarVacio()
-    const modalAcuerdos = await abrirBuscadorAcuerdos(page);
-    await esperarProcesamiento(page);
-
-    // Priorizar estrictamente el campo dentro del modal recién abierto.
-    let campoBusqueda = modalAcuerdos.locator('input:not([type="hidden"]):visible').last();
-    const cantidadInputsModal = await modalAcuerdos.locator('input:not([type="hidden"])').count().catch(() => 0);
-    if (!cantidadInputsModal || !await visible(campoBusqueda)) {
-      campoBusqueda = await controlCercaDeEtiqueta(
-        page,
-        'Nombre del Acuerdo Comercial, Contrato o Convenio'
+    const biofile = new BiofileClient({
+      page: sesion.page, context: sesion.context, config: configUsuario, logger
+    });
+    const resultado = await biofile.investigarCatalogoEmpresa({
+      acuerdo: empresaBuscada, tiposEvaluacion: TIPOS_EVALUACION_BIOFILE
+    });
+    const relaciones = (resultado.paquetes || [])
+      .filter((item) => item?.nombre && TIPOS_EVALUACION_BIOFILE.includes(item?.tipoEvaluacion))
+      .filter((item, indice, lista) => lista.findIndex((otro) =>
+        normalizar(otro.nombre) === normalizar(item.nombre) &&
+        normalizar(otro.tipoEvaluacion) === normalizar(item.tipoEvaluacion)
+      ) === indice);
+    const nombresPaquetes = relaciones.map((item) => item.nombre)
+      .filter((nombre, indice, lista) =>
+        lista.findIndex((otro) => normalizar(otro) === normalizar(nombre)) === indice
       );
-    }
-
-    await campoBusqueda.click({ clickCount: 3 });
-    await campoBusqueda.fill('');
-    await campoBusqueda.fill(empresaBuscada);
-
-    await ejecutarBusquedaModalAcuerdos(page, campoBusqueda);
-    await esperarProcesamiento(page);
-    await page.waitForTimeout(600);
-
-    const fila = await encontrarFilaEmpresa(page, empresaBuscada);
-    if (!fila) {
-      throw new Error('BIOFILE no devolvió un Acuerdo Comercial para "' + empresaBuscada + '".');
-    }
-
-    const interactivos = [
-      fila.locator('td[onclick]').first(),
-      fila.locator('a,button,input[type="button"],input[type="image"]').first(),
-      fila.locator('img').first(),
-      fila.locator('td').first()
-    ];
-    let seleccionada = false;
-    for (const interactivo of interactivos) {
-      if (await visible(interactivo)) {
-        await interactivo.click({ force: true });
-        seleccionada = true;
-        break;
-      }
-    }
-    if (!seleccionada) {
-      throw new Error('Se encontró el acuerdo, pero no se pudo abrir desde la fila de resultados.');
-    }
-    await esperarProcesamiento(page);
-    await page.waitForTimeout(500);
-
-    const acuerdoExacto = await acuerdoDesdePantalla(page, empresaBuscada);
-
-    const tabPaquetes = page.getByText(/Paquetes\s+por\s+Cargo/i).first();
-    if (!await visible(tabPaquetes)) {
-      throw new Error('No se encontró la pestaña "Paquetes por Cargo" en el acuerdo.');
-    }
-    await tabPaquetes.click({ force: true });
-    await page.waitForTimeout(300);
-    await esperarProcesamiento(page);
-
-    const inputPaquete = await controlCercaDeEtiqueta(page, 'Nombre del Paquete');
-    let nombresPaquetes = await obtenerSugerenciasAutocomplete(page, inputPaquete, 6000);
-    nombresPaquetes = nombresPaquetes
-      .map((x) => String(x || '').trim())
-      .filter(Boolean)
-      .filter((x) => !/^seleccione$/i.test(x) && !/^crear nuevo$/i.test(x))
-      .filter((x, i, arr) => arr.findIndex((y) => normalizar(y) === normalizar(x)) === i);
-
-    const relaciones = [];
-    const diagnostico = [];
-    for (const nombrePaquete of nombresPaquetes) {
-      try {
-        await seleccionarSugerencia(page, inputPaquete, nombrePaquete);
-        const lectura = await esperarTiposProductoServicio(page, {
-          paquete: nombrePaquete,
-          timeoutMs: 10000
-        });
-        diagnostico.push({
-          paquete: nombrePaquete,
-          estado: 'OK',
-          opcionesProductoServicio: lectura.textos,
-          tiposReconocidos: lectura.tipos
-        });
-        for (const tipo of lectura.tipos) {
-          if (!TIPOS_EVALUACION_BIOFILE.includes(tipo)) continue;
-          if (!relaciones.some((x) =>
-            normalizar(x.nombre) === normalizar(nombrePaquete) &&
-            normalizar(x.tipoEvaluacion) === normalizar(tipo)
-          )) {
-            relaciones.push({ nombre: nombrePaquete, tipoEvaluacion: tipo });
-          }
-        }
-      } catch (errorPaquete) {
-        diagnostico.push({
-          paquete: nombrePaquete,
-          estado: 'ERROR',
-          error: errorPaquete.message,
-          opcionesProductoServicio: errorPaquete.detalleProductoServicio?.textos || [],
-          tiposReconocidos: errorPaquete.detalleProductoServicio?.tipos || []
-        });
-        logger.warn('No se pudo clasificar un paquete; se continuará con los demás.', {
-          empresa: empresaBuscada,
-          paquete: nombrePaquete,
-          error: errorPaquete.message
-        });
-      }
-    }
-
-    if (nombresPaquetes.length > 0 && relaciones.length === 0) {
-      const error = new Error(
-        'BIOFILE mostró ' + nombresPaquetes.length +
-        ' paquete(s), pero no fue posible asociarlos con su Tipo de Evaluación. ' +
-        'No se guardará un catálogo vacío.'
-      );
-      error.detalleCatalogo = {
-        empresaBuscada,
-        acuerdoExacto,
-        paquetesDetectados: nombresPaquetes,
-        diagnostico
-      };
-      throw error;
-    }
-
-    logger.info('Investigación de paquetes finalizada.', {
+    logger.info('Investigación finalizada desde Órdenes de Servicio.', {
       empresa: empresaBuscada,
-      acuerdoExacto,
+      acuerdoExacto: resultado.acuerdoExacto || empresaBuscada,
+      empresasMisionDetectadas: (resultado.empresasMision || []).length,
       paquetesDetectados: nombresPaquetes.length,
       relacionesValidas: relaciones.length
     });
-
     return {
       empresaBuscada,
-      acuerdoExacto,
+      acuerdoExacto: resultado.acuerdoExacto || empresaBuscada,
+      empresasMision: resultado.empresasMision || [],
       paquetes: relaciones,
       paquetesDetectados: nombresPaquetes.length,
       nombresPaquetes,
-      diagnostico,
+      diagnostico: resultado.diagnostico || [],
+      metodo: 'AUTOCOMPLETADOS_ORDENES_BIOFILE',
       investigadoEnIso: new Date().toISOString()
     };
+  } catch (error) {
+    if (!error.detalleCatalogo) {
+      error.detalleCatalogo = {
+        paso: 'AUTOCOMPLETADOS_ORDENES_BIOFILE', empresaBuscada, mensaje: error.message
+      };
+    }
+    throw error;
   } finally {
     await sesion?.browser?.close().catch(() => {});
   }

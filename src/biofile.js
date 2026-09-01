@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { descargarArchivoEnMemoria } from './drive.js';
 import { asegurarDirectorio, fechaArchivo, normalizar } from './util.js';
+import {
+  construirUrlMetodoAutocomplete,
+  extraerOpcionesAutocomplete,
+  limpiarOpcionesCatalogo
+} from './autocomplete-biofile.js';
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -227,6 +232,204 @@ if (
         detalle: error.message
       });
     }
+  }
+
+  async #descriptorAutocomplete(locator) {
+    return locator.evaluate((elemento) => {
+      const componentes = window.Sys?.Application?.getComponents?.() || [];
+      const id = elemento.id || '';
+      const coincide = (componente) => {
+        try {
+          const ids = [
+            componente?.get_element?.()?.id,
+            componente?.get_targetControlID?.(),
+            componente?._targetControlID,
+            componente?._element?.id,
+            componente?._textBoxElement?.id
+          ].filter(Boolean);
+          return ids.includes(id) || componente?.get_element?.() === elemento ||
+            componente?._element === elemento || componente?._textBoxElement === elemento;
+        } catch { return false; }
+      };
+      const componente = componentes.find(coincide) || null;
+      const leer = (getter, interno, fallback = '') => {
+        try {
+          if (componente && typeof componente[getter] === 'function') {
+            const valor = componente[getter]();
+            if (valor !== undefined && valor !== null) return valor;
+          }
+        } catch {}
+        return componente?.[interno] ?? fallback;
+      };
+      return {
+        inputId: id,
+        componenteEncontrado: Boolean(componente),
+        servicePath: String(leer('get_servicePath', '_servicePath', '') || ''),
+        serviceMethod: String(leer('get_serviceMethod', '_serviceMethod', '') || ''),
+        contextKey: String(leer('get_contextKey', '_contextKey', '') ?? ''),
+        count: Math.max(10, Number(leer('get_completionSetCount', '_completionSetCount', 50)) || 50)
+      };
+    });
+  }
+
+  async #sugerenciasVisibles() {
+    return this.page.evaluate(() => {
+      const visible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+      const selectores = [
+        '[role="option"]', '.ajax__autocomplete_item', '.ajax__autocomplete_highlighted_item',
+        '[class*="autocomplete" i] li', '[id*="completion" i] li', '[id*="autocomplete" i] li'
+      ];
+      const textos = [];
+      for (const selector of selectores) {
+        for (const el of document.querySelectorAll(selector)) {
+          if (!visible(el)) continue;
+          const texto = String(el.textContent || '').trim().replace(/\s+/g, ' ');
+          if (texto && texto.length <= 220 && !textos.includes(texto)) textos.push(texto);
+        }
+      }
+      return textos;
+    }).catch(() => []);
+  }
+
+  async #consultarOpcionesAutocomplete(locator, { campo, prefixText = '', timeoutMs = 8000 } = {}) {
+    const descriptor = await this.#descriptorAutocomplete(locator).catch(() => ({
+      componenteEncontrado: false, servicePath: '', serviceMethod: '', contextKey: '', count: 50
+    }));
+    let urlMetodo = '';
+    try {
+      urlMetodo = construirUrlMetodoAutocomplete({
+        paginaActual: this.page.url(),
+        servicePath: descriptor.servicePath,
+        serviceMethod: descriptor.serviceMethod
+      });
+    } catch {}
+
+    let respuestaDirecta = null;
+    if (urlMetodo) {
+      respuestaDirecta = await this.page.evaluate(async ({ url, prefixText, count, contextKey, timeoutMs }) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: {
+              Accept: 'application/json, text/javascript, */*; q=0.01',
+              'Content-Type': 'application/json; charset=UTF-8'
+            },
+            body: JSON.stringify({ prefixText, count, contextKey }), signal: controller.signal
+          });
+          const texto = await response.text();
+          let data = null;
+          try { data = texto ? JSON.parse(texto) : null; } catch {}
+          return { ok: response.ok, status: response.status, data };
+        } finally { clearTimeout(timeout); }
+      }, {
+        url: urlMetodo, prefixText, count: descriptor.count,
+        contextKey: descriptor.contextKey, timeoutMs
+      }).catch(() => ({ ok: false, status: 0, data: null }));
+      const opciones = limpiarOpcionesCatalogo(extraerOpcionesAutocomplete(respuestaDirecta.data));
+      if (respuestaDirecta.ok && opciones.length) {
+        this.logger?.info('Opciones consultadas directamente en el WebMethod de BIOFILE.', {
+          campo, serviceMethod: descriptor.serviceMethod,
+          contextKey: descriptor.contextKey, opciones: opciones.length
+        });
+        return { opciones, fuente: 'webmethod', descriptor, urlMetodo, status: respuestaDirecta.status };
+      }
+    }
+
+    // Respaldo: activar el autocompletado visual y capturar su respuesta XHR.
+    const respuestas = [];
+    const listener = async (response) => {
+      try {
+        if (!/json|javascript/i.test(String(response.headers()['content-type'] || ''))) return;
+        if (descriptor.serviceMethod && !response.url().includes(descriptor.serviceMethod)) return;
+        const data = await response.json().catch(() => null);
+        if (data) respuestas.push(...extraerOpcionesAutocomplete(data));
+      } catch {}
+    };
+    this.page.on('response', listener);
+    try {
+      await locator.scrollIntoViewIfNeeded().catch(() => {});
+      await locator.click({ clickCount: 3 });
+      await locator.fill('');
+      if (prefixText) await locator.pressSequentially(prefixText, { delay: 25 });
+      await locator.evaluate((el) => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown' }));
+      }).catch(() => {});
+      const limite = Date.now() + timeoutMs;
+      while (Date.now() < limite) {
+        const opciones = limpiarOpcionesCatalogo([...respuestas, ...await this.#sugerenciasVisibles()]);
+        if (opciones.length) return { opciones, fuente: 'interfaz', descriptor, urlMetodo, status: 200 };
+        await this.page.waitForTimeout(150);
+      }
+    } finally { this.page.off('response', listener); }
+    if (respuestaDirecta?.ok) {
+      return {
+        opciones: [], fuente: 'webmethod-vacio', descriptor, urlMetodo,
+        status: respuestaDirecta.status
+      };
+    }
+    return { opciones: [], fuente: 'consulta-fallida', descriptor, urlMetodo, status: 0 };
+  }
+
+  /** Consulta los paquetes desde Órdenes de Servicio, cuyo flujo ya usa el robot. */
+  async investigarCatalogoEmpresa({ acuerdo, tiposEvaluacion = [] }) {
+    const acuerdoBuscado = String(acuerdo || '').trim();
+    if (!acuerdoBuscado) throw new Error('El acuerdo comercial es obligatorio.');
+    await this.abrirOrdenNueva();
+    const tipos = tiposEvaluacion.map((tipo) => String(tipo || '').trim()).filter(Boolean);
+    const paquetes = [];
+    const diagnostico = [];
+    let acuerdoExacto = acuerdoBuscado;
+    let empresasMision = [];
+
+    for (const tipoEvaluacion of tipos) {
+      await this.#llenar('tipoEvaluacion', 'Tipo de Evaluación Médica o Procedimiento', tipoEvaluacion, { autocomplete: true });
+      await this.#llenar('acuerdoComercial', 'Nombre del Acuerdo Comercial, Contrato o Convenio', acuerdoBuscado, { autocomplete: true });
+      await this.page.waitForTimeout(350);
+      const acuerdoInput = await this.#controlCercaDeEtiqueta('acuerdoComercial', 'Nombre del Acuerdo Comercial, Contrato o Convenio');
+      acuerdoExacto = String(await acuerdoInput.inputValue().catch(() => acuerdoBuscado)).trim() || acuerdoBuscado;
+
+      if (!empresasMision.length) {
+        const inputMision = await this.#controlCercaDeEtiqueta('empresaMision', 'Nombre de la Empresa en Misión').catch(() => null);
+        if (inputMision) {
+          const consultaMision = await this.#consultarOpcionesAutocomplete(inputMision, {
+            campo: 'Empresa en Misión', prefixText: '', timeoutMs: 6500
+          });
+          empresasMision = limpiarOpcionesCatalogo(consultaMision.opciones);
+        }
+      }
+
+      const inputPaquete = await this.#controlCercaDeEtiqueta('paquete', 'Nombre del Paquete');
+      const consulta = await this.#consultarOpcionesAutocomplete(inputPaquete, {
+        campo: 'Nombre del Paquete', prefixText: '', timeoutMs: 8000
+      });
+      const nombres = limpiarOpcionesCatalogo(consulta.opciones);
+      const consultaValida = consulta.status >= 200 && consulta.status < 300;
+      diagnostico.push({
+        tipoEvaluacion, estado: consultaValida ? 'OK' : 'ERROR', paquetes: nombres, fuente: consulta.fuente,
+        serviceMethod: consulta.descriptor?.serviceMethod || '',
+        contextKey: consulta.descriptor?.contextKey || '',
+        error: consultaValida ? '' : 'No se pudo invocar el autocompletado de paquetes de BIOFILE.'
+      });
+      for (const nombre of nombres) {
+        if (!paquetes.some((item) => normalizar(item.nombre) === normalizar(nombre) &&
+          normalizar(item.tipoEvaluacion) === normalizar(tipoEvaluacion))) {
+          paquetes.push({ nombre, tipoEvaluacion });
+        }
+      }
+    }
+    if (diagnostico.length && diagnostico.every((item) => item.estado === 'ERROR')) {
+      const error = new Error(
+        'BIOFILE no permitió consultar el autocompletado de paquetes para ningún tipo de evaluación.'
+      );
+      error.detalleCatalogo = {
+        paso: 'AUTOCOMPLETADO_PAQUETES_ORDENES', acuerdoExacto, diagnostico
+      };
+      throw error;
+    }
+    return { acuerdoExacto, empresasMision, paquetes, diagnostico };
   }
 
   async captura(nombre) {
