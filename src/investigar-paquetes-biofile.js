@@ -164,67 +164,117 @@ async function clickFisico(locator, page) {
 }
 
 async function abrirBuscadorAcuerdos(page) {
-  // En el DOM real de BIOFILE el input #B_BH_BtnBuscar vive dentro del TD
-  // #B_BH_TdBuscar. La lógica de WebForms puede estar asociada al contenedor,
-  // por eso primero hacemos un clic físico sobre el TD y no solo sobre el input.
-  const candidatos = [
-    page.locator('#B_BH_TdBuscar'),
-    page.locator('#B_BH_BtnBuscar'),
-    page.locator('td.BHEnabled:has(#B_BH_BtnBuscar)'),
-    page.locator('input[type="image"][id$="_BtnBuscar"]').first()
-  ];
+  const input = page.locator('#B_BH_BtnBuscar');
+  const td = page.locator('#B_BH_TdBuscar');
 
-  let encontro = false;
-  for (const loc of candidatos) {
-    if (!await visible(loc)) continue;
-    encontro = true;
-
-    // Intento 1: clic físico real (más fiel para WebForms/input type=image).
-    await clickFisico(loc, page).catch(() => false);
-    let modal = await esperarModalAcuerdos(page, 7000);
-    if (modal) return modal;
-
-    // Intento 2: click normal de Playwright, sin force.
-    await loc.click({ timeout: 5000 }).catch(() => {});
-    modal = await esperarModalAcuerdos(page, 5000);
-    if (modal) return modal;
-
-    // Intento 3: disparar click nativo del DOM para cubrir handlers agregados por JS.
-    await loc.evaluate((el) => {
-      const objetivo = el.querySelector?.('input[type="image"],button,input') || el;
-      objetivo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      objetivo.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-      objetivo.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    }).catch(() => {});
-    modal = await esperarModalAcuerdos(page, 5000);
-    if (modal) return modal;
-  }
-
-  if (!encontro) {
+  if (!await visible(input) && !await visible(td)) {
     throw new Error(
       'No se encontró el control Buscar de Acuerdos Comerciales. ' +
-      'Se esperaban #B_BH_TdBuscar o #B_BH_BtnBuscar.'
+      'Se esperaban #B_BH_BtnBuscar o #B_BH_TdBuscar.'
     );
   }
 
+  const probarModal = async (espera = 7000) => {
+    const modal = await esperarModalAcuerdos(page, espera);
+    if (modal) return modal;
+    await page.waitForLoadState('domcontentloaded', { timeout: 2500 }).catch(() => {});
+    return esperarModalAcuerdos(page, 2500);
+  };
+
+  // 1) Clic físico exactamente sobre el INPUT type=image. Antes se priorizaba
+  // el TD contenedor, pero ese TD no tiene onclick en el DOM real de BIOFILE.
+  if (await visible(input)) {
+    await clickFisico(input, page).catch(() => false);
+    let modal = await probarModal(7000);
+    if (modal) return modal;
+
+    // 2) Click normal de Playwright sobre el submitter real.
+    await input.click({ timeout: 5000 }).catch(() => {});
+    modal = await probarModal(5000);
+    if (modal) return modal;
+
+    // 3) requestSubmit(input): importante para input type=image / ASP.NET WebForms,
+    // porque conserva el submitter y permite que el formulario envíe BtnBuscar.x/y.
+    await input.evaluate((el) => {
+      const form = el.form;
+      if (!form) return;
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit(el);
+      }
+    }).catch(() => {});
+    modal = await probarModal(7000);
+    if (modal) return modal;
+
+    // 4) Simular explícitamente las coordenadas de un input type=image y enviar
+    // el formulario nativo. Este es el patrón que ASP.NET reconoce cuando el
+    // servidor espera ctl00$...$BtnBuscar.x / .y.
+    await input.evaluate((el) => {
+      const form = el.form;
+      const name = el.getAttribute('name') || '';
+      if (!form || !name) return;
+
+      const agregar = (n, v) => {
+        let h = form.querySelector('input[type="hidden"][data-biofile-temp="' + n.replace(/"/g, '\\"') + '"]');
+        if (!h) {
+          h = document.createElement('input');
+          h.type = 'hidden';
+          h.dataset.biofileTemp = n;
+          h.name = n;
+          form.appendChild(h);
+        }
+        h.value = v;
+      };
+
+      agregar(name + '.x', '8');
+      agregar(name + '.y', '8');
+
+      const submitNativo = HTMLFormElement.prototype.submit;
+      submitNativo.call(form);
+    }).catch(() => {});
+    modal = await probarModal(9000);
+    if (modal) return modal;
+  }
+
+  // 5) Último recurso: __doPostBack con el UniqueID del control, si BIOFILE
+  // lo expone. No todas las pantallas lo usan para botones tipo image.
+  const postback = await page.evaluate(() => {
+    const el = document.querySelector('#B_BH_BtnBuscar');
+    const target = el?.getAttribute('name') || '';
+    if (!target || typeof window.__doPostBack !== 'function') return false;
+    window.__doPostBack(target, '');
+    return true;
+  }).catch(() => false);
+
+  if (postback) {
+    const modal = await probarModal(9000);
+    if (modal) return modal;
+  }
+
   const diagnostico = await page.evaluate(() => {
-    const td = document.querySelector('#B_BH_TdBuscar');
-    const input = document.querySelector('#B_BH_BtnBuscar');
+    const tdEl = document.querySelector('#B_BH_TdBuscar');
+    const inputEl = document.querySelector('#B_BH_BtnBuscar');
+    const form = inputEl?.form;
+    const prm = window.Sys?.WebForms?.PageRequestManager?.getInstance?.();
     return {
       readyState: document.readyState,
       url: location.href,
-      tdExiste: Boolean(td),
-      tdClase: td?.className || '',
-      tdOnclick: td?.getAttribute('onclick') || '',
-      inputExiste: Boolean(input),
-      inputTipo: input?.getAttribute('type') || '',
-      inputSrc: input?.getAttribute('src') || '',
-      inputOnclick: input?.getAttribute('onclick') || ''
+      tdExiste: Boolean(tdEl),
+      tdClase: tdEl?.className || '',
+      tdOnclick: tdEl?.getAttribute('onclick') || '',
+      inputExiste: Boolean(inputEl),
+      inputTipo: inputEl?.getAttribute('type') || '',
+      inputName: inputEl?.getAttribute('name') || '',
+      inputSrc: inputEl?.getAttribute('src') || '',
+      inputOnclick: inputEl?.getAttribute('onclick') || '',
+      formExiste: Boolean(form),
+      formAction: form?.getAttribute('action') || '',
+      doPostBack: typeof window.__doPostBack === 'function',
+      aspNetAjax: Boolean(prm)
     };
   }).catch(() => ({}));
 
   const error = new Error(
-    'BIOFILE no abrió la ventana de búsqueda después de intentar clic físico, clic Playwright y clic DOM. ' +
+    'BIOFILE no abrió la ventana de búsqueda después de probar el submit real de WebForms. ' +
     'Diagnóstico: ' + JSON.stringify(diagnostico)
   );
   error.detalleCatalogo = { paso: 'ABRIR_BUSCADOR_ACUERDOS', diagnostico };
