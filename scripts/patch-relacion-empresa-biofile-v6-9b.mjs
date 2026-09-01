@@ -82,12 +82,17 @@ if (!biofile.includes(`/* ${MARCA}_BIOFILE */`)) {
     'campoNormalizado de autocompletado'
   );
 
-  biofile = reemplazarUna(
-    biofile,
-    `      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {\n        buscar: 'PART',\n        seleccionar: 'PARTICULARES'\n      },\n\n      'NOMBRE DE LA EMPRESA EN MISION': {\n        buscar: 'PART',\n        seleccionar: 'PARTICULARES'\n      },`,
-    `      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {\n        buscar: valorOriginal,\n        seleccionar: valorOriginal\n      },\n\n      'NOMBRE DE LA EMPRESA EN MISION': {\n        buscar: valorOriginal,\n        seleccionar: valorOriginal\n      },`,
-    'reglas fijas PARTICULARES de Acuerdo/Misión'
-  );
+  // Las versiones nuevas ya seleccionan dinámicamente el valor exacto para
+  // todos los autocompletados. En instalaciones antiguas todavía convertimos
+  // las dos reglas fijas de PARTICULARES.
+  if (!biofile.includes('textoBusquedaAutocomplete(etiqueta, valorOriginal)')) {
+    biofile = reemplazarUna(
+      biofile,
+      `      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {\n        buscar: 'PART',\n        seleccionar: 'PARTICULARES'\n      },\n\n      'NOMBRE DE LA EMPRESA EN MISION': {\n        buscar: 'PART',\n        seleccionar: 'PARTICULARES'\n      },`,
+      `      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {\n        buscar: valorOriginal,\n        seleccionar: valorOriginal\n      },\n\n      'NOMBRE DE LA EMPRESA EN MISION': {\n        buscar: valorOriginal,\n        seleccionar: valorOriginal\n      },`,
+      'reglas fijas PARTICULARES de Acuerdo/Misión'
+    );
+  }
 
   const anclaAutocomplete = `  async #seleccionarAutocompletado(locator, valor, etiqueta) {`;
   const espera = `  async #esperarProcesamientoBiofile(timeoutMs = 7000) {\n    const limite = Date.now() + timeoutMs;\n    let vioProcesamiento = false;\n    while (Date.now() < limite) {\n      const ocupado = await this.page.evaluate(() => {\n        const visible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));\n        return [...document.querySelectorAll('div,span,p,td')].some((el) => {\n          if (!visible(el)) return false;\n          const t = String(el.textContent || '').trim().replace(/\\s+/g, ' ');\n          return t.length <= 90 && /^(procesando datos|procesando|cargando)(\\.{0,3})$/i.test(t);\n        });\n      }).catch(() => false);\n      if (!ocupado) {\n        if (vioProcesamiento) await this.page.waitForTimeout(180);\n        return;\n      }\n      vioProcesamiento = true;\n      await this.page.waitForTimeout(120);\n    }\n    this.logger?.warn('BIOFILE continuó mostrando procesamiento; se validarán estrictamente los campos.');\n  }\n\n`;

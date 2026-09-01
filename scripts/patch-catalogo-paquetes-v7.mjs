@@ -318,7 +318,9 @@ if (!procesar.includes('/* ' + MARCA + '_PROCESAR */')) {
 
 // ==================== BIOFILE: AUTOCOMPLETADO DINÁMICO ====================
 let biofile = fs.readFileSync(biofilePath, 'utf8');
-if (!biofile.includes('/* ' + MARCA + '_BIOFILE */')) {
+const autocompleteDinamicoIntegrado =
+  biofile.includes('textoBusquedaAutocomplete(etiqueta, valorOriginal)');
+if (!biofile.includes('/* ' + MARCA + '_BIOFILE */') && !autocompleteDinamicoIntegrado) {
   const tipoFijo = `      'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO': {
         buscar: 'INGRES',
         seleccionar: 'EVALUACIÓN MÉDICA OCUPACIONAL DE INGRESO'
