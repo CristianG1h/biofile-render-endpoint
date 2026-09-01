@@ -106,7 +106,11 @@ async function controlCercaDeEtiqueta(page, etiqueta) {
 
 async function clickBuscarVisible(page, preferirUltimo = false) {
   const candidatos = [
-    page.getByRole('button', { name: /^Buscar$/i }),
+    // Botón real de la barra superior de Acuerdos Comerciales.
+    page.locator('#B_BH_BtnBuscar'),
+    page.locator('input[type="image"][id$="_BtnBuscar"]'),
+    page.locator('input[type="image"][src*="BtnBuscarEnabled" i]'),
+    page.getByRole('button', { name: /Buscar/i }),
     page.locator('input[type="button"][value*="Buscar" i], input[type="submit"][value*="Buscar" i]'),
     page.locator('[title*="Buscar" i], [alt*="Buscar" i]')
   ];
@@ -124,6 +128,47 @@ async function clickBuscarVisible(page, preferirUltimo = false) {
       }
     }
   }
+  return false;
+}
+
+async function abrirBuscadorAcuerdos(page) {
+  const botonPrincipal = page.locator('#B_BH_BtnBuscar');
+  if (await visible(botonPrincipal)) {
+    await botonPrincipal.click({ force: true });
+  } else if (!await clickBuscarVisible(page, false)) {
+    throw new Error(
+      'No se encontró el botón Buscar de Acuerdos Comerciales. ' +
+      'Selector esperado: #B_BH_BtnBuscar.'
+    );
+  }
+
+  const modal = page.locator('.VentanaModal-Cuerpo').last();
+  await modal.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(250);
+
+  if (!await visible(modal)) {
+    throw new Error('BIOFILE recibió el clic en Buscar, pero no abrió la ventana de búsqueda de Acuerdos Comerciales.');
+  }
+}
+
+async function ejecutarBusquedaModalAcuerdos(page, campoBusqueda) {
+  const candidatos = [
+    // En la ventana modal BIOFILE el botón de búsqueda es realmente un TD
+    // con onclick="return BuscarVacio();" y clase BHEnabledBuscar.
+    page.locator('.VentanaModal-Cuerpo td.BHEnabledBuscar[onclick*="BuscarVacio"]').last(),
+    page.locator('.VentanaModal-Cuerpo [onclick*="BuscarVacio"]').last(),
+    page.locator('.VentanaModal-Cuerpo input[type="image"][src*="BtnBuscar" i]').last(),
+    page.locator('.VentanaModal-Cuerpo input[type="image"]').last()
+  ];
+
+  for (const loc of candidatos) {
+    if (await visible(loc)) {
+      await loc.click({ force: true });
+      return true;
+    }
+  }
+
+  await campoBusqueda.press('Enter').catch(() => {});
   return false;
 }
 
@@ -301,20 +346,26 @@ async function esperarTiposProductoServicio(page, {
 }
 
 async function encontrarFilaEmpresa(page, empresa) {
-  const filas = page.locator('tr');
-  const cantidad = await filas.count();
   const buscada = normalizar(empresa);
+  const grupos = [
+    page.locator('.VentanaModal-Cuerpo tr'),
+    page.locator('tr')
+  ];
 
-  let mejor = null;
-  for (let i = 0; i < cantidad; i += 1) {
-    const fila = filas.nth(i);
-    if (!await fila.isVisible().catch(() => false)) continue;
-    const texto = normalizar(await fila.innerText().catch(() => ''));
-    if (!texto) continue;
-    if (texto.includes(buscada)) return fila;
-    if (!mejor && buscada.length >= 16 && texto.includes(buscada.slice(0, Math.min(40, buscada.length)))) mejor = fila;
+  for (const filas of grupos) {
+    const cantidad = await filas.count();
+    let mejor = null;
+    for (let i = 0; i < cantidad; i += 1) {
+      const fila = filas.nth(i);
+      if (!await fila.isVisible().catch(() => false)) continue;
+      const texto = normalizar(await fila.innerText().catch(() => ''));
+      if (!texto) continue;
+      if (texto.includes(buscada)) return fila;
+      if (!mejor && buscada.length >= 16 && texto.includes(buscada.slice(0, Math.min(40, buscada.length)))) mejor = fila;
+    }
+    if (mejor) return mejor;
   }
-  return mejor;
+  return null;
 }
 
 async function acuerdoDesdePantalla(page, fallback) {
@@ -363,12 +414,11 @@ export async function investigarPaquetesEmpresaBiofile({
     await page.waitForTimeout(900);
     await esperarProcesamiento(page);
 
-    // BIOFILE exige abrir primero el modal Buscar; el campo de la pantalla principal
-    // no sirve para filtrar acuerdos existentes.
-    if (!await clickBuscarVisible(page, false)) {
-      throw new Error('No se encontró el botón Buscar de Acuerdos Comerciales.');
-    }
-    await page.waitForTimeout(500);
+    // Flujo real confirmado en el DOM de BIOFILE:
+    // 1. botón superior #B_BH_BtnBuscar
+    // 2. modal .VentanaModal-Cuerpo
+    // 3. buscar con TD.BHEnabledBuscar onclick=BuscarVacio()
+    await abrirBuscadorAcuerdos(page);
     await esperarProcesamiento(page);
 
     const campoBusqueda = await controlCercaDeEtiqueta(
@@ -380,22 +430,31 @@ export async function investigarPaquetesEmpresaBiofile({
     await campoBusqueda.fill('');
     await campoBusqueda.fill(empresaBuscada);
 
-    if (!await clickBuscarVisible(page, true)) {
-      await campoBusqueda.press('Enter').catch(() => {});
-    }
+    await ejecutarBusquedaModalAcuerdos(page, campoBusqueda);
     await esperarProcesamiento(page);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
 
     const fila = await encontrarFilaEmpresa(page, empresaBuscada);
     if (!fila) {
       throw new Error('BIOFILE no devolvió un Acuerdo Comercial para "' + empresaBuscada + '".');
     }
 
-    const interactivo = fila.locator('a,button,input[type="button"],input[type="image"],img').first();
-    if (await visible(interactivo)) {
-      await interactivo.click({ force: true });
-    } else {
-      await fila.locator('td').first().click({ force: true });
+    const interactivos = [
+      fila.locator('td[onclick]').first(),
+      fila.locator('a,button,input[type="button"],input[type="image"]').first(),
+      fila.locator('img').first(),
+      fila.locator('td').first()
+    ];
+    let seleccionada = false;
+    for (const interactivo of interactivos) {
+      if (await visible(interactivo)) {
+        await interactivo.click({ force: true });
+        seleccionada = true;
+        break;
+      }
+    }
+    if (!seleccionada) {
+      throw new Error('Se encontró el acuerdo, pero no se pudo abrir desde la fila de resultados.');
     }
     await esperarProcesamiento(page);
     await page.waitForTimeout(500);
