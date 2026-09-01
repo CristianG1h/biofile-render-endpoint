@@ -236,21 +236,25 @@ async function seleccionarSugerencia(page, input, texto) {
     const item = exacta.nth(i);
     if (await item.isVisible().catch(() => false)) {
       await item.click({ force: true });
+      await page.waitForTimeout(220);
       await esperarProcesamiento(page);
+      await input.press('Tab').catch(() => {});
       return;
     }
   }
 
   await input.press('ArrowDown').catch(() => {});
   await input.press('Enter').catch(() => {});
+  await page.waitForTimeout(220);
   await esperarProcesamiento(page);
+  await input.press('Tab').catch(() => {});
   const final = String(await input.inputValue().catch(() => '')).trim();
   if (normalizar(final) !== normalizar(texto)) {
     throw new Error('No se pudo seleccionar exactamente el paquete "' + texto + '". Resultado: "' + final + '".');
   }
 }
 
-async function tiposProductoServicio(page) {
+async function leerTiposProductoServicio(page) {
   const control = await controlCercaDeEtiqueta(page, 'Producto o Servicio');
   const tag = await control.evaluate((el) => el.tagName.toUpperCase());
 
@@ -258,7 +262,7 @@ async function tiposProductoServicio(page) {
   if (tag === 'SELECT') {
     textos = await control.locator('option').allTextContents();
   } else {
-    textos = await obtenerSugerenciasAutocomplete(page, control, 3000);
+    textos = await obtenerSugerenciasAutocomplete(page, control, 1200);
   }
 
   const tipos = [];
@@ -266,7 +270,34 @@ async function tiposProductoServicio(page) {
     const tipo = normalizarTipoEvaluacion(texto);
     if (tipo && !tipos.some((x) => normalizar(x) === normalizar(tipo))) tipos.push(tipo);
   }
-  return tipos;
+  return {
+    tipos,
+    textos: textos.map((x) => String(x || '').trim()).filter(Boolean)
+  };
+}
+
+async function esperarTiposProductoServicio(page, {
+  paquete = '',
+  timeoutMs = 10000
+} = {}) {
+  const limite = Date.now() + timeoutMs;
+  let ultimo = { tipos: [], textos: [] };
+
+  // BIOFILE llena "Producto o Servicio" mediante AJAX después de seleccionar
+  // el paquete. El overlay "Procesando datos..." no siempre alcanza a aparecer.
+  while (Date.now() < limite) {
+    await esperarProcesamiento(page, 1200).catch(() => {});
+    ultimo = await leerTiposProductoServicio(page).catch(() => ultimo);
+    if (ultimo.tipos.length) return ultimo;
+    await page.waitForTimeout(300);
+  }
+
+  const error = new Error(
+    'BIOFILE mostró el paquete "' + paquete +
+    '", pero no terminó de cargar un Tipo de Evaluación en "Producto o Servicio".'
+  );
+  error.detalleProductoServicio = ultimo;
+  throw error;
 }
 
 async function encontrarFilaEmpresa(page, empresa) {
@@ -388,11 +419,21 @@ export async function investigarPaquetesEmpresaBiofile({
       .filter((x, i, arr) => arr.findIndex((y) => normalizar(y) === normalizar(x)) === i);
 
     const relaciones = [];
+    const diagnostico = [];
     for (const nombrePaquete of nombresPaquetes) {
       try {
         await seleccionarSugerencia(page, inputPaquete, nombrePaquete);
-        const tipos = await tiposProductoServicio(page);
-        for (const tipo of tipos) {
+        const lectura = await esperarTiposProductoServicio(page, {
+          paquete: nombrePaquete,
+          timeoutMs: 10000
+        });
+        diagnostico.push({
+          paquete: nombrePaquete,
+          estado: 'OK',
+          opcionesProductoServicio: lectura.textos,
+          tiposReconocidos: lectura.tipos
+        });
+        for (const tipo of lectura.tipos) {
           if (!TIPOS_EVALUACION_BIOFILE.includes(tipo)) continue;
           if (!relaciones.some((x) =>
             normalizar(x.nombre) === normalizar(nombrePaquete) &&
@@ -402,12 +443,34 @@ export async function investigarPaquetesEmpresaBiofile({
           }
         }
       } catch (errorPaquete) {
+        diagnostico.push({
+          paquete: nombrePaquete,
+          estado: 'ERROR',
+          error: errorPaquete.message,
+          opcionesProductoServicio: errorPaquete.detalleProductoServicio?.textos || [],
+          tiposReconocidos: errorPaquete.detalleProductoServicio?.tipos || []
+        });
         logger.warn('No se pudo clasificar un paquete; se continuará con los demás.', {
           empresa: empresaBuscada,
           paquete: nombrePaquete,
           error: errorPaquete.message
         });
       }
+    }
+
+    if (nombresPaquetes.length > 0 && relaciones.length === 0) {
+      const error = new Error(
+        'BIOFILE mostró ' + nombresPaquetes.length +
+        ' paquete(s), pero no fue posible asociarlos con su Tipo de Evaluación. ' +
+        'No se guardará un catálogo vacío.'
+      );
+      error.detalleCatalogo = {
+        empresaBuscada,
+        acuerdoExacto,
+        paquetesDetectados: nombresPaquetes,
+        diagnostico
+      };
+      throw error;
     }
 
     logger.info('Investigación de paquetes finalizada.', {
@@ -422,6 +485,8 @@ export async function investigarPaquetesEmpresaBiofile({
       acuerdoExacto,
       paquetes: relaciones,
       paquetesDetectados: nombresPaquetes.length,
+      nombresPaquetes,
+      diagnostico,
       investigadoEnIso: new Date().toISOString()
     };
   } finally {
