@@ -139,9 +139,9 @@ async function esperarModalAcuerdos(page, timeoutMs = 18000) {
 
     // Algunas versiones de BIOFILE pintan primero el contenedor y luego la clase.
     const campoModal = page.locator(
-      '.VentanaModal-Contenido input, .VentanaModal-Contenido select, ' +
-      '[class*="VentanaModal" i] input, [class*="VentanaModal" i] select'
-    ).filter({ visible: true }).first();
+      '.VentanaModal-Contenido input:visible, .VentanaModal-Contenido select:visible, ' +
+      '[class*="VentanaModal" i] input:visible, [class*="VentanaModal" i] select:visible'
+    ).first();
     if (await visible(campoModal)) {
       const contenedor = campoModal.locator('xpath=ancestor::*[contains(@class,"VentanaModal")][1]');
       if (await visible(contenedor)) return contenedor;
@@ -505,7 +505,7 @@ export async function investigarPaquetesEmpresaBiofile({
     await esperarProcesamiento(page);
 
     // Priorizar estrictamente el campo dentro del modal recién abierto.
-    let campoBusqueda = modalAcuerdos.locator('input:not([type="hidden"])').filter({ visible: true }).last();
+    let campoBusqueda = modalAcuerdos.locator('input:not([type="hidden"]):visible').last();
     const cantidadInputsModal = await modalAcuerdos.locator('input:not([type="hidden"])').count().catch(() => 0);
     if (!cantidadInputsModal || !await visible(campoBusqueda)) {
       campoBusqueda = await controlCercaDeEtiqueta(
