@@ -1,5 +1,17 @@
 import { normalizar } from './util.js';
 
+export function textoBusquedaAutocomplete(etiqueta, valor) {
+  const original = String(valor || '').trim();
+  const campo = normalizar(etiqueta);
+  const buscado = normalizar(original);
+  if (campo !== 'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO') return original;
+  if (buscado.includes('POST INCAPACIDAD')) return 'POST';
+  if (buscado.includes('PERIODIC')) return 'PERIOD';
+  if (buscado.includes('EGRES')) return 'EGRES';
+  if (buscado.includes('INGRES')) return 'INGRES';
+  return original;
+}
+
 function agregarUnico(lista, valor) {
   const texto = String(valor || '').trim().replace(/\s+/g, ' ');
   if (!texto) return;

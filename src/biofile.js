@@ -5,7 +5,8 @@ import { asegurarDirectorio, fechaArchivo, normalizar } from './util.js';
 import {
   construirUrlMetodoAutocomplete,
   extraerOpcionesAutocomplete,
-  limpiarOpcionesCatalogo
+  limpiarOpcionesCatalogo,
+  textoBusquedaAutocomplete
 } from './autocomplete-biofile.js';
 
 function escapeRegex(s) {
@@ -277,7 +278,8 @@ if (
       const visible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
       const selectores = [
         '[role="option"]', '.ajax__autocomplete_item', '.ajax__autocomplete_highlighted_item',
-        '[class*="autocomplete" i] li', '[id*="completion" i] li', '[id*="autocomplete" i] li'
+        '.autocomplete_completionListElement > *',
+        '[class*="autocomplete" i] li', '[id*="completion" i] > *', '[id*="autocomplete" i] li'
       ];
       const textos = [];
       for (const selector of selectores) {
@@ -383,21 +385,36 @@ if (
     const diagnostico = [];
     let acuerdoExacto = acuerdoBuscado;
     let empresasMision = [];
+    let acuerdoSeleccionado = false;
 
     for (const tipoEvaluacion of tipos) {
       await this.#llenar('tipoEvaluacion', 'Tipo de Evaluación Médica o Procedimiento', tipoEvaluacion, { autocomplete: true });
-      await this.#llenar('acuerdoComercial', 'Nombre del Acuerdo Comercial, Contrato o Convenio', acuerdoBuscado, { autocomplete: true });
-      await this.page.waitForTimeout(350);
       const acuerdoInput = await this.#controlCercaDeEtiqueta('acuerdoComercial', 'Nombre del Acuerdo Comercial, Contrato o Convenio');
+      const acuerdoActual = String(await acuerdoInput.inputValue().catch(() => '')).trim();
+      if (!acuerdoSeleccionado || normalizar(acuerdoActual) !== normalizar(acuerdoBuscado)) {
+        await this.#escribirEnControl(
+          acuerdoInput,
+          acuerdoBuscado,
+          'Nombre del Acuerdo Comercial, Contrato o Convenio',
+          { autocomplete: true }
+        );
+        acuerdoSeleccionado = true;
+      }
+      await this.page.waitForTimeout(500);
       acuerdoExacto = String(await acuerdoInput.inputValue().catch(() => acuerdoBuscado)).trim() || acuerdoBuscado;
 
       if (!empresasMision.length) {
         const inputMision = await this.#controlCercaDeEtiqueta('empresaMision', 'Nombre de la Empresa en Misión').catch(() => null);
         if (inputMision) {
-          const consultaMision = await this.#consultarOpcionesAutocomplete(inputMision, {
-            campo: 'Empresa en Misión', prefixText: '', timeoutMs: 6500
-          });
-          empresasMision = limpiarOpcionesCatalogo(consultaMision.opciones);
+          const misionActual = String(await inputMision.inputValue().catch(() => '')).trim();
+          if (misionActual) {
+            empresasMision = limpiarOpcionesCatalogo([misionActual]);
+          } else {
+            const consultaMision = await this.#consultarOpcionesAutocomplete(inputMision, {
+              campo: 'Empresa en Misión', prefixText: '', timeoutMs: 6500
+            });
+            empresasMision = limpiarOpcionesCatalogo(consultaMision.opciones);
+          }
         }
       }
 
@@ -1109,155 +1126,109 @@ if (
 
   async #seleccionarAutocompletado(locator, valor, etiqueta) {
     const valorOriginal = String(valor ?? '').trim();
-
-    if (!valorOriginal) {
-      throw new Error(`El valor para ${etiqueta} está vacío.`);
-    }
+    if (!valorOriginal) throw new Error(`El valor para ${etiqueta} está vacío.`);
 
     const campoNormalizado = normalizar(etiqueta);
-
     if (campoNormalizado === 'CIUDAD DE NACIMIENTO') {
-      await this.#seleccionarCiudadNacimiento(
-        locator,
-        valorOriginal,
-        etiqueta
-      );
+      await this.#seleccionarCiudadNacimiento(locator, valorOriginal, etiqueta);
       return;
     }
 
-    /*
-     * buscar: texto corto que se escribe en Biofile.
-     * seleccionar: opción exacta que obligatoriamente debe elegirse.
-     */
-    const reglas = {
-      'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO': {
-        buscar: 'INGRES',
-        seleccionar: 'EVALUACIÓN MÉDICA OCUPACIONAL DE INGRESO'
-      },
+    const valorNormalizado = normalizar(valorOriginal);
+    const textoBusqueda = textoBusquedaAutocomplete(etiqueta, valorOriginal);
 
-      'NOMBRE DEL ACUERDO COMERCIAL CONTRATO O CONVENIO': {
-        buscar: 'PART',
-        seleccionar: 'PARTICULARES'
-      },
-
-      'NOMBRE DE LA EMPRESA EN MISION': {
-        buscar: 'PART',
-        seleccionar: 'PARTICULARES'
-      },
-
-      'NOMBRE DEL PAQUETE': {
-        buscar: 'NO APL',
-        seleccionar: 'NO APLICA'
-      },
-
-      EPS: {
-        buscar: 'NO REFIERE',
-        seleccionar: 'NO REFIERE'
-      },
-
-      AFP: {
-        buscar: 'NO REFIERE',
-        seleccionar: 'NO REFIERE'
-      },
-
-      ARL: {
-        buscar: 'NO REFIERE',
-        seleccionar: 'NO REFIERE'
-      }
-    };
-
-    const regla = reglas[campoNormalizado] || {
-      buscar: valorOriginal,
-      seleccionar: null
-    };
-
-    const textoBusqueda = regla.buscar;
-    const textoExacto = regla.seleccionar;
+    // Son los elementos azules que se ven en el video de Órdenes. Se busca
+    // por texto normalizado porque BIOFILE mezcla tildes y espacios internos.
+    const selectorOpciones = [
+      '.autocomplete_completionListElement:visible > *:visible',
+      '.ajax__autocomplete_item:visible',
+      '.ajax__autocomplete_highlighted_item:visible',
+      '[id*="completionList" i]:visible > *:visible',
+      '[role="listbox"]:visible [role="option"]:visible',
+      'ul.ui-autocomplete:visible li:visible',
+      '.autocomplete-suggestions:visible .autocomplete-suggestion:visible',
+      '.tt-menu:visible .tt-suggestion:visible'
+    ].join(', ');
 
     await locator.scrollIntoViewIfNeeded().catch(() => {});
-
+    await locator.waitFor({ state: 'visible', timeout: 10000 });
     await locator.evaluate((elemento) => {
       elemento.setAttribute('autocomplete', 'off');
       elemento.setAttribute('autocorrect', 'off');
       elemento.setAttribute('spellcheck', 'false');
     }).catch(() => {});
 
-    await locator.click({ clickCount: 3 });
-    await locator.fill('');
-
-    await locator.pressSequentially(textoBusqueda, {
-      delay: 35
-    });
-
     let seleccionConfirmada = false;
     let opcionSeleccionada = '';
+    const opcionesVistas = [];
 
-    if (textoExacto) {
-      const expresionExacta = new RegExp(
-        `^\\s*${escapeRegex(textoExacto)}\\s*$`,
-        'i'
-      );
-
-      const candidatos = this.page.getByText(expresionExacta);
-      const limite = Date.now() + 4000;
-
-      while (
-        Date.now() < limite &&
-        !seleccionConfirmada
-      ) {
+    const seleccionarVisibleExacta = async (timeoutMs) => {
+      const limite = Date.now() + timeoutMs;
+      while (Date.now() < limite) {
+        const candidatos = this.page.locator(selectorOpciones);
         const cantidad = await candidatos.count();
-
         for (let indice = 0; indice < cantidad; indice += 1) {
           const candidato = candidatos.nth(indice);
-
-          if (await candidato.isVisible().catch(() => false)) {
-            opcionSeleccionada = String(
-              await candidato.innerText().catch(() => textoExacto)
-            ).trim();
-
-            await candidato.click({ force: true });
-            seleccionConfirmada = true;
-            break;
-          }
+          if (!await candidato.isVisible().catch(() => false)) continue;
+          const texto = String(await candidato.innerText().catch(() => ''))
+            .trim().replace(/\s+/g, ' ');
+          if (texto && !opcionesVistas.includes(texto)) opcionesVistas.push(texto);
+          if (normalizar(texto) !== valorNormalizado) continue;
+          await candidato.click({ force: true });
+          opcionSeleccionada = texto;
+          await this.page.waitForTimeout(300);
+          return true;
         }
-
-        if (!seleccionConfirmada) {
-          await this.page.waitForTimeout(100);
-        }
+        await this.page.waitForTimeout(120);
       }
+      return false;
+    };
 
-      if (!seleccionConfirmada) {
-        throw new Error(
-          `Biofile no mostró la opción exacta "${textoExacto}" ` +
-          `para el campo ${etiqueta}.`
-        );
-      }
-    } else {
-      await this.page.waitForTimeout(800);
-      await locator.press('Enter');
-      seleccionConfirmada = true;
+    const intentos = [
+      { nombre: 'lista completa', texto: '', espera: 5000 },
+      { nombre: 'búsqueda corta', texto: textoBusqueda, espera: 8000 }
+    ];
+    if (normalizar(textoBusqueda) !== valorNormalizado) {
+      intentos.push({ nombre: 'texto exacto', texto: valorOriginal, espera: 8000 });
     }
 
-    await this.page.waitForTimeout(250);
+    for (const intento of intentos) {
+      await locator.click({ clickCount: 3 }).catch(() => {});
+      await locator.fill('');
+      await locator.click().catch(() => {});
+      if (intento.texto) {
+        await locator.pressSequentially(intento.texto, { delay: 45 });
+      } else {
+        await locator.evaluate((elemento) => {
+          elemento.focus();
+          elemento.dispatchEvent(new Event('input', { bubbles: true }));
+          elemento.dispatchEvent(new KeyboardEvent('keyup', {
+            bubbles: true, key: 'ArrowDown', code: 'ArrowDown'
+          }));
+        }).catch(() => {});
+      }
+      seleccionConfirmada = await seleccionarVisibleExacta(intento.espera);
+      if (seleccionConfirmada) break;
+      this.logger?.warn('BIOFILE no mostró todavía la opción exacta; se intentará otra búsqueda.', {
+        campo: etiqueta,
+        intento: intento.nombre,
+        textoEscrito: intento.texto,
+        opcionesVistas: opcionesVistas.slice(-12)
+      });
+    }
 
-    const valorFinal = String(
-      await locator.inputValue().catch(() => '')
-    ).trim();
-
-    if (!valorFinal) {
+    if (!seleccionConfirmada) {
       throw new Error(
-        `El campo ${etiqueta} quedó vacío después de seleccionar la opción.`
+        `BIOFILE no mostró la opción exacta "${valorOriginal}" para el campo ${etiqueta}. ` +
+        `Opciones visibles: ${opcionesVistas.slice(-12).join(' | ') || 'ninguna'}.`
       );
     }
 
-    if (
-      textoExacto &&
-      normalizar(valorFinal) !== normalizar(textoExacto)
-    ) {
+    const valorFinal = String(await locator.inputValue().catch(() => '')).trim();
+    if (normalizar(valorFinal) !== valorNormalizado) {
       throw new Error(
-        `Biofile seleccionó un valor incorrecto en ${etiqueta}. ` +
-        `Esperado: "${textoExacto}". ` +
-        `Resultado: "${valorFinal}".`
+        `BIOFILE seleccionó un valor incorrecto en ${etiqueta}. ` +
+        `Esperado: "${valorOriginal}". Resultado: "${valorFinal}".`
       );
     }
 
@@ -1266,16 +1237,12 @@ if (
       elemento.dispatchEvent(new Event('change', { bubbles: true }));
       elemento.dispatchEvent(new Event('blur', { bubbles: true }));
     }).catch(() => {});
-
-    this.logger?.info(
-      'Opción exacta de autocompletado seleccionada.',
-      {
-        campo: etiqueta,
-        textoEscrito: textoBusqueda,
-        opcionSeleccionada: opcionSeleccionada || valorFinal,
-        valorFinal
-      }
-    );
+    this.logger?.info('Opción exacta de autocompletado seleccionada.', {
+      campo: etiqueta,
+      textoEscrito: textoBusqueda,
+      opcionSeleccionada: opcionSeleccionada || valorFinal,
+      valorFinal
+    });
   }
 
 async #escribirEnControl(
