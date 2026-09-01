@@ -131,24 +131,104 @@ async function clickBuscarVisible(page, preferirUltimo = false) {
   return false;
 }
 
+async function esperarModalAcuerdos(page, timeoutMs = 18000) {
+  const limite = Date.now() + timeoutMs;
+  while (Date.now() < limite) {
+    const modal = page.locator('.VentanaModal-Cuerpo').last();
+    if (await visible(modal)) return modal;
+
+    // Algunas versiones de BIOFILE pintan primero el contenedor y luego la clase.
+    const campoModal = page.locator(
+      '.VentanaModal-Contenido input, .VentanaModal-Contenido select, ' +
+      '[class*="VentanaModal" i] input, [class*="VentanaModal" i] select'
+    ).filter({ visible: true }).first();
+    if (await visible(campoModal)) {
+      const contenedor = campoModal.locator('xpath=ancestor::*[contains(@class,"VentanaModal")][1]');
+      if (await visible(contenedor)) return contenedor;
+    }
+
+    await page.waitForTimeout(250);
+  }
+  return null;
+}
+
+async function clickFisico(locator, page) {
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  const box = await locator.boundingBox().catch(() => null);
+  if (!box) return false;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(70);
+  await page.mouse.up();
+  return true;
+}
+
 async function abrirBuscadorAcuerdos(page) {
-  const botonPrincipal = page.locator('#B_BH_BtnBuscar');
-  if (await visible(botonPrincipal)) {
-    await botonPrincipal.click({ force: true });
-  } else if (!await clickBuscarVisible(page, false)) {
+  // En el DOM real de BIOFILE el input #B_BH_BtnBuscar vive dentro del TD
+  // #B_BH_TdBuscar. La lógica de WebForms puede estar asociada al contenedor,
+  // por eso primero hacemos un clic físico sobre el TD y no solo sobre el input.
+  const candidatos = [
+    page.locator('#B_BH_TdBuscar'),
+    page.locator('#B_BH_BtnBuscar'),
+    page.locator('td.BHEnabled:has(#B_BH_BtnBuscar)'),
+    page.locator('input[type="image"][id$="_BtnBuscar"]').first()
+  ];
+
+  let encontro = false;
+  for (const loc of candidatos) {
+    if (!await visible(loc)) continue;
+    encontro = true;
+
+    // Intento 1: clic físico real (más fiel para WebForms/input type=image).
+    await clickFisico(loc, page).catch(() => false);
+    let modal = await esperarModalAcuerdos(page, 7000);
+    if (modal) return modal;
+
+    // Intento 2: click normal de Playwright, sin force.
+    await loc.click({ timeout: 5000 }).catch(() => {});
+    modal = await esperarModalAcuerdos(page, 5000);
+    if (modal) return modal;
+
+    // Intento 3: disparar click nativo del DOM para cubrir handlers agregados por JS.
+    await loc.evaluate((el) => {
+      const objetivo = el.querySelector?.('input[type="image"],button,input') || el;
+      objetivo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      objetivo.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      objetivo.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    }).catch(() => {});
+    modal = await esperarModalAcuerdos(page, 5000);
+    if (modal) return modal;
+  }
+
+  if (!encontro) {
     throw new Error(
-      'No se encontró el botón Buscar de Acuerdos Comerciales. ' +
-      'Selector esperado: #B_BH_BtnBuscar.'
+      'No se encontró el control Buscar de Acuerdos Comerciales. ' +
+      'Se esperaban #B_BH_TdBuscar o #B_BH_BtnBuscar.'
     );
   }
 
-  const modal = page.locator('.VentanaModal-Cuerpo').last();
-  await modal.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(250);
+  const diagnostico = await page.evaluate(() => {
+    const td = document.querySelector('#B_BH_TdBuscar');
+    const input = document.querySelector('#B_BH_BtnBuscar');
+    return {
+      readyState: document.readyState,
+      url: location.href,
+      tdExiste: Boolean(td),
+      tdClase: td?.className || '',
+      tdOnclick: td?.getAttribute('onclick') || '',
+      inputExiste: Boolean(input),
+      inputTipo: input?.getAttribute('type') || '',
+      inputSrc: input?.getAttribute('src') || '',
+      inputOnclick: input?.getAttribute('onclick') || ''
+    };
+  }).catch(() => ({}));
 
-  if (!await visible(modal)) {
-    throw new Error('BIOFILE recibió el clic en Buscar, pero no abrió la ventana de búsqueda de Acuerdos Comerciales.');
-  }
+  const error = new Error(
+    'BIOFILE no abrió la ventana de búsqueda después de intentar clic físico, clic Playwright y clic DOM. ' +
+    'Diagnóstico: ' + JSON.stringify(diagnostico)
+  );
+  error.detalleCatalogo = { paso: 'ABRIR_BUSCADOR_ACUERDOS', diagnostico };
+  throw error;
 }
 
 async function ejecutarBusquedaModalAcuerdos(page, campoBusqueda) {
@@ -411,20 +491,28 @@ export async function investigarPaquetesEmpresaBiofile({
     const page = sesion.page;
 
     await page.goto(ACUERDOS_URL, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(900);
+    await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => document.readyState === 'complete', null, { timeout: 15000 }).catch(() => {});
+    await page.locator('#B_BH_TdBuscar, #B_BH_BtnBuscar').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1200);
     await esperarProcesamiento(page);
 
     // Flujo real confirmado en el DOM de BIOFILE:
     // 1. botón superior #B_BH_BtnBuscar
     // 2. modal .VentanaModal-Cuerpo
     // 3. buscar con TD.BHEnabledBuscar onclick=BuscarVacio()
-    await abrirBuscadorAcuerdos(page);
+    const modalAcuerdos = await abrirBuscadorAcuerdos(page);
     await esperarProcesamiento(page);
 
-    const campoBusqueda = await controlCercaDeEtiqueta(
-      page,
-      'Nombre del Acuerdo Comercial, Contrato o Convenio'
-    );
+    // Priorizar estrictamente el campo dentro del modal recién abierto.
+    let campoBusqueda = modalAcuerdos.locator('input:not([type="hidden"])').filter({ visible: true }).last();
+    const cantidadInputsModal = await modalAcuerdos.locator('input:not([type="hidden"])').count().catch(() => 0);
+    if (!cantidadInputsModal || !await visible(campoBusqueda)) {
+      campoBusqueda = await controlCercaDeEtiqueta(
+        page,
+        'Nombre del Acuerdo Comercial, Contrato o Convenio'
+      );
+    }
 
     await campoBusqueda.click({ clickCount: 3 });
     await campoBusqueda.fill('');
