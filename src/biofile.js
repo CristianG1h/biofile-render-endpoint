@@ -6,6 +6,7 @@ import {
   construirUrlMetodoAutocomplete,
   extraerOpcionesAutocomplete,
   limpiarOpcionesCatalogo,
+  resolverOpcionUnica,
   textoBusquedaAutocomplete
 } from './autocomplete-biofile.js';
 
@@ -384,6 +385,7 @@ if (
     const paquetes = [];
     const diagnostico = [];
     let acuerdoExacto = acuerdoBuscado;
+    let acuerdoParaSeleccionar = acuerdoBuscado;
     let empresasMision = [];
     let acuerdoSeleccionado = false;
 
@@ -391,10 +393,26 @@ if (
       await this.#llenar('tipoEvaluacion', 'Tipo de Evaluación Médica o Procedimiento', tipoEvaluacion, { autocomplete: true });
       const acuerdoInput = await this.#controlCercaDeEtiqueta('acuerdoComercial', 'Nombre del Acuerdo Comercial, Contrato o Convenio');
       const acuerdoActual = String(await acuerdoInput.inputValue().catch(() => '')).trim();
-      if (!acuerdoSeleccionado || normalizar(acuerdoActual) !== normalizar(acuerdoBuscado)) {
+      if (!acuerdoSeleccionado) {
+        const consultaAcuerdo = await this.#consultarOpcionesAutocomplete(acuerdoInput, {
+          campo: 'Nombre del Acuerdo Comercial, Contrato o Convenio',
+          prefixText: acuerdoBuscado,
+          timeoutMs: 9000
+        });
+        const opcionesAcuerdo = limpiarOpcionesCatalogo(consultaAcuerdo.opciones);
+        acuerdoParaSeleccionar = resolverOpcionUnica(opcionesAcuerdo, acuerdoBuscado) || acuerdoBuscado;
+        if (opcionesAcuerdo.length > 1 && acuerdoParaSeleccionar === acuerdoBuscado &&
+          !opcionesAcuerdo.some((opcion) => normalizar(opcion) === normalizar(acuerdoBuscado))) {
+          throw new Error(
+            `BIOFILE encontró varias coincidencias para el acuerdo "${acuerdoBuscado}". ` +
+            `Escribe un nombre más preciso: ${opcionesAcuerdo.slice(0, 8).join(' | ')}.`
+          );
+        }
+      }
+      if (!acuerdoSeleccionado || !acuerdoActual) {
         await this.#escribirEnControl(
           acuerdoInput,
-          acuerdoBuscado,
+          acuerdoParaSeleccionar,
           'Nombre del Acuerdo Comercial, Contrato o Convenio',
           { autocomplete: true }
         );
@@ -1176,6 +1194,44 @@ if (
           if (normalizar(texto) !== valorNormalizado) continue;
           await candidato.click({ force: true });
           opcionSeleccionada = texto;
+          await this.page.waitForTimeout(300);
+          return true;
+        }
+
+        // Respaldo para variantes de AjaxControlToolkit que no conservan las
+        // clases habituales: limita la búsqueda al menú de autocompletado y
+        // marca el elemento hoja cuyo texto normalizado sea exactamente igual.
+        const marca = `biofile-opcion-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const textoDom = await this.page.evaluate(({ esperado, marca }) => {
+          const norm = (valor) => String(valor || '')
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9]+/g, ' ').trim().toUpperCase();
+          const visible = (el) => Boolean(el &&
+            (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+          const candidatos = [...document.querySelectorAll('div,li,td,span,a')]
+            .filter(visible)
+            .filter((el) => norm(el.textContent) === esperado)
+            .filter((el) => {
+              const propio = `${el.id || ''} ${el.className || ''} ${el.getAttribute('role') || ''}`;
+              const padre = el.closest('[class*="autocomplete" i],[id*="completion" i],\n' +
+                '[role="listbox"],[class*="suggestion" i]');
+              return /autocomplete|completion|option|suggestion/i.test(propio) || Boolean(padre);
+            })
+            .sort((a, b) => a.childElementCount - b.childElementCount ||
+              (a.getBoundingClientRect().width * a.getBoundingClientRect().height) -
+              (b.getBoundingClientRect().width * b.getBoundingClientRect().height));
+          const elegido = candidatos[0];
+          if (!elegido) return '';
+          elegido.setAttribute('data-biofile-opcion-exacta', marca);
+          return String(elegido.textContent || '').trim().replace(/\s+/g, ' ');
+        }, { esperado: valorNormalizado, marca }).catch(() => '');
+        if (textoDom) {
+          const candidatoDom = this.page.locator(
+            `[data-biofile-opcion-exacta="${marca}"]`
+          ).first();
+          await candidatoDom.click({ force: true });
+          opcionSeleccionada = textoDom;
+          if (!opcionesVistas.includes(textoDom)) opcionesVistas.push(textoDom);
           await this.page.waitForTimeout(300);
           return true;
         }

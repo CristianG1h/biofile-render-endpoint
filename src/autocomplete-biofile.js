@@ -12,6 +12,21 @@ export function textoBusquedaAutocomplete(etiqueta, valor) {
   return original;
 }
 
+export function resolverOpcionUnica(opciones = [], busqueda = '') {
+  const buscado = normalizar(busqueda);
+  if (!buscado) return '';
+  const limpias = opciones
+    .map((valor) => String(valor || '').trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+  const exacta = limpias.find((valor) => normalizar(valor) === buscado);
+  if (exacta) return exacta;
+  const compatibles = limpias.filter((valor) => {
+    const opcion = normalizar(valor);
+    return opcion.includes(buscado) || buscado.includes(opcion);
+  });
+  return compatibles.length === 1 ? compatibles[0] : '';
+}
+
 function agregarUnico(lista, valor) {
   const texto = String(valor || '').trim().replace(/\s+/g, ' ');
   if (!texto) return;

@@ -3,6 +3,7 @@ import {
   construirUrlMetodoAutocomplete,
   extraerOpcionesAutocomplete,
   limpiarOpcionesCatalogo,
+  resolverOpcionUnica,
   textoBusquedaAutocomplete
 } from '../src/autocomplete-biofile.js';
 
@@ -40,4 +41,10 @@ assert.equal(textoBusquedaAutocomplete(
   'Nombre del Acuerdo Comercial, Contrato o Convenio',
   'COMPAÑIA PRODUCTORA DE ENVASES METALICOS S A S'
 ), 'COMPAÑIA PRODUCTORA DE ENVASES METALICOS S A S');
+assert.equal(resolverOpcionUnica([
+  'COMPAÑIA PRODUCTORA DE ENVASES METALICOS S A S PROENMETAL S.A.S.'
+], 'PROENMETAL'), 'COMPAÑIA PRODUCTORA DE ENVASES METALICOS S A S PROENMETAL S.A.S.');
+assert.equal(resolverOpcionUnica([
+  'PROENMETAL NORTE S.A.S.', 'PROENMETAL SUR S.A.S.'
+], 'PROENMETAL'), '');
 console.log('[BIOFILE] Pruebas de autocompletado y paquetes superadas.');
