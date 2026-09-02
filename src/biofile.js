@@ -294,7 +294,12 @@ if (
     }).catch(() => []);
   }
 
-  async #consultarOpcionesAutocomplete(locator, { campo, prefixText = '', timeoutMs = 8000 } = {}) {
+  async #consultarOpcionesAutocomplete(locator, {
+    campo,
+    prefixText = '',
+    timeoutMs = 8000,
+    soloInterfaz = false
+  } = {}) {
     const descriptor = await this.#descriptorAutocomplete(locator).catch(() => ({
       componenteEncontrado: false, servicePath: '', serviceMethod: '', contextKey: '', count: 50
     }));
@@ -308,7 +313,7 @@ if (
     } catch {}
 
     let respuestaDirecta = null;
-    if (urlMetodo) {
+    if (urlMetodo && !soloInterfaz) {
       respuestaDirecta = await this.page.evaluate(async ({ url, prefixText, count, contextKey, timeoutMs }) => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -350,7 +355,7 @@ if (
         if (data) respuestas.push(...extraerOpcionesAutocomplete(data));
       } catch {}
     };
-    this.page.on('response', listener);
+    if (!soloInterfaz) this.page.on('response', listener);
     try {
       await locator.scrollIntoViewIfNeeded().catch(() => {});
       await locator.click({ clickCount: 3 });
@@ -362,11 +367,25 @@ if (
       }).catch(() => {});
       const limite = Date.now() + timeoutMs;
       while (Date.now() < limite) {
-        const opciones = limpiarOpcionesCatalogo([...respuestas, ...await this.#sugerenciasVisibles()]);
+        const visibles = await this.#sugerenciasVisibles();
+        const opciones = limpiarOpcionesCatalogo(
+          soloInterfaz ? visibles : [...respuestas, ...visibles]
+        );
+        if (soloInterfaz && visibles.length) {
+          return {
+            opciones,
+            fuente: opciones.length ? 'interfaz' : 'interfaz-vacia',
+            descriptor,
+            urlMetodo,
+            status: 200
+          };
+        }
         if (opciones.length) return { opciones, fuente: 'interfaz', descriptor, urlMetodo, status: 200 };
         await this.page.waitForTimeout(150);
       }
-    } finally { this.page.off('response', listener); }
+    } finally {
+      if (!soloInterfaz) this.page.off('response', listener);
+    }
     if (respuestaDirecta?.ok) {
       return {
         opciones: [], fuente: 'webmethod-vacio', descriptor, urlMetodo,
@@ -438,7 +457,10 @@ if (
 
       const inputPaquete = await this.#controlCercaDeEtiqueta('paquete', 'Nombre del Paquete');
       const consulta = await this.#consultarOpcionesAutocomplete(inputPaquete, {
-        campo: 'Nombre del Paquete', prefixText: '', timeoutMs: 8000
+        campo: 'Nombre del Paquete',
+        prefixText: '',
+        timeoutMs: 8000,
+        soloInterfaz: true
       });
       const nombres = limpiarOpcionesCatalogo(consulta.opciones);
       const consultaValida = consulta.status >= 200 && consulta.status < 300;
