@@ -57,7 +57,25 @@ src = reemplazarUna(
   '    })).filter((x) => x.clave && x.acuerdo && acuerdoDirectorioValido(x.acuerdo));',
   'filtro de empresas guardadas'
 );
+
+const recientesViejo = `    const nuevas = [...items]
+      .sort((a, b) => String(b.primeraDeteccionIso).localeCompare(String(a.primeraDeteccionIso)))
+      .slice(0, 12)
+      .map((x) => ({ acuerdo: x.acuerdo, cliente: x.cliente, primeraDeteccionIso: x.primeraDeteccionIso }));`;
+const recientesNuevo = `    const ultimoExito = texto(r[1]);
+    const nuevasUltima = Number(r[4] || 0);
+    const nuevas = nuevasUltima > 0
+      ? [...items]
+          .filter((x) => texto(x.primeraDeteccionIso) === ultimoExito)
+          .sort((a, b) => a.acuerdo.localeCompare(b.acuerdo, 'es', { sensitivity: 'base' }))
+          .slice(0, Math.min(12, nuevasUltima))
+          .map((x) => ({ acuerdo: x.acuerdo, cliente: x.cliente, primeraDeteccionIso: x.primeraDeteccionIso }))
+      : [];`;
+src = reemplazarUna(src, recientesViejo, recientesNuevo, 'empresas recientes');
+
+src = reemplazarUna(src, '      ultimoExitoIso: texto(r[1]),', '      ultimoExitoIso: ultimoExito,', 'último éxito del estado');
 src = reemplazarUna(src, '      totalEmpresas: Number(r[3] || items.length || 0),', '      totalEmpresas: items.length,', 'total real de empresas');
+src = reemplazarUna(src, '      nuevasUltima: Number(r[4] || 0),', '      nuevasUltima,', 'contador de nuevas');
 src = reemplazarUna(src, '      fechaDesde: texto(r[5]),', '      fechaDesde: normalizarFechaDirectorio(r[5]),', 'fecha desde del estado');
 src = reemplazarUna(src, '      fechaHasta: texto(r[6]),', '      fechaHasta: normalizarFechaDirectorio(r[6]),', 'fecha hasta del estado');
 
@@ -121,9 +139,9 @@ const guardarNuevo = `    if (rango.completo) {
     });`;
 src = reemplazarUna(src, guardarViejo, guardarNuevo, 'guardado de sincronización completa');
 
-if (!src.includes(MARCA) || !src.includes('table.rows') || !src.includes('valueInputOption=RAW') || !src.includes('reemplazar: rango.completo')) {
+if (!src.includes(MARCA) || !src.includes('table.rows') || !src.includes('valueInputOption=RAW') || !src.includes('reemplazar: rango.completo') || !src.includes('const nuevasUltima')) {
   throw new Error('Directorio calidad v7.4c quedó incompleto.');
 }
 
 fs.writeFileSync(directorioPath, src, 'utf8');
-console.log('[Directorio] v7.4c: columnas anidadas, fechas seriales y reconstrucción completa corregidas.');
+console.log('[Directorio] v7.4c: columnas anidadas, fechas seriales, recientes y reconstrucción completa corregidas.');
