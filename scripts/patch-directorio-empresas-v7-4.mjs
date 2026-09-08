@@ -6,11 +6,16 @@ let server = fs.readFileSync(serverPath, 'utf8');
 let directorio = fs.readFileSync(directorioPath, 'utf8');
 const MARCA = 'DIRECTORIO_EMPRESAS_BIOFILE_V74';
 
-// Mantener el módulo importable en pruebas sin exigir Playwright instalado y
-// corregir el grant type JWT de Google antes de usar el directorio.
+// Mantener el módulo importable en pruebas sin exigir Playwright instalado,
+// corregir OAuth y evitar confundir empresas cuyo nombre contiene "TOTAL"
+// (por ejemplo VIVIENDA TOTAL SAS) con una fila de totales del informe.
 directorio = directorio
   .replace("import { crearSesion } from './browser.js';\n", '')
   .replace("grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer'", "grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer'")
+  .replace(
+    "if (!acuerdo || normalizarClaveEmpresa(acuerdo).includes('TOTAL')) continue;",
+    "if (!acuerdo || /^TOTAL(?: GENERAL)?(?:\\s|$)/.test(normalizarClaveEmpresa(acuerdo))) continue;"
+  )
   .replace(
     '    sesion = await crearSesion(cfg, logger);',
     "    const { crearSesion } = await import('./browser.js');\n    sesion = await crearSesion(cfg, logger);"
