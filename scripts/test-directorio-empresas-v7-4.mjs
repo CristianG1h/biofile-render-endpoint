@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { normalizarClaveEmpresa, filasTablaAClientes, rangoSincronizacionEmpresas } from '../src/directorio-empresas-biofile.js';
 
 assert.equal(normalizarClaveEmpresa('  Regina 11 S.A.S. '), 'REGINA 11 S A S');
@@ -22,5 +23,10 @@ assert.match(full.hasta, /^\d{2}\/\d{2}\/\d{4}$/);
 const incremental = rangoSincronizacionEmpresas({ ultimoExitoIso: '2026-09-08T12:00:00.000Z' }, { completo: false });
 assert.equal(incremental.completo, false);
 assert.equal(incremental.desde, '06/09/2026');
+
+const directorioFuente = fs.readFileSync(new URL('../src/directorio-empresas-biofile.js', import.meta.url), 'utf8');
+assert.match(directorioFuente, /BHEnabledBuscar/);
+assert.match(directorioFuente, /BuscarDatosParaExcel/);
+assert.match(directorioFuente, /Lista-de-Clientes/);
 
 console.log('Directorio empresas BIOFILE v7.4: pruebas OK');
