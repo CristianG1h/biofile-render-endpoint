@@ -9,10 +9,14 @@ const indice = construirIndiceRelaciones([
   ['HUMAN RESOURCES MANAGMENT SA', 'HUMAN RESOURCES MANAGMENDT SA'],
   ['ACUERDO UNICO SAS', 'EMPRESA MISION UNICA SAS'],
   ['ACUERDO A SAS', 'MISION COMPARTIDA SAS'],
-  ['ACUERDO B SAS', 'MISION COMPARTIDA SAS']
+  ['ACUERDO B SAS', 'MISION COMPARTIDA SAS'],
+  // Caso real reportado desde el panel: REGINA 11 también aparece como misión
+  // de otro acuerdo, pero su relación propia debe tener prioridad.
+  ['REGINA 11 SAS', 'REGINA 11 SAS'],
+  ['RIVERPEZ INTERNACIONAL S A S', 'REGINA 11 SAS']
 ], {
   version: 'TEST',
-  relations: 7,
+  relations: 9,
   specialAliases: {
     RIVER: { principal: 'TEMPORALES AVANZADOS SAS', mision: 'RIVERPEZ INTERNATIONAL S.A.S' }
   }
@@ -78,6 +82,38 @@ assert.deepEqual(
   }
 );
 
+assert.deepEqual(
+  resolverRelacionEnIndice(indice, {
+    acuerdo: 'PARTICULARES',
+    empresaMision: 'REGINA 11 SAS'
+  }),
+  {
+    acuerdo: 'REGINA 11 SAS',
+    empresaMision: 'REGINA 11 SAS',
+    fuente: 'mision-recuperada-acuerdo-particulares'
+  }
+);
+
+assert.deepEqual(
+  resolverRelacionEnIndice(indice, {
+    acuerdo: 'GESTLAB S.A.S',
+    empresaMision: 'PARTICULARES'
+  }),
+  {
+    acuerdo: 'GESTLAB S.A.S',
+    empresaMision: 'GESTLAB S.A.S',
+    fuente: 'acuerdo-recuperado-mision-particulares'
+  }
+);
+
+assert.equal(
+  resolverRelacionEnIndice(indice, {
+    acuerdo: 'ACUERDO A SAS',
+    empresaMision: 'EMPRESA MISION UNICA SAS'
+  })?.ambiguo,
+  true
+);
+
 assert.equal(
   resolverRelacionEnIndice(indice, { empresa: 'MISION COMPARTIDA SAS' })?.ambiguo,
   true
@@ -88,4 +124,4 @@ assert.equal(
   null
 );
 
-console.log('[TEST] Relación empresarial v6.9 validada, incluido HUMAN con typo equivalente.');
+console.log('[TEST] Relación empresarial v7.3 validada, incluido PARTICULARES + misión real y HUMAN con typo equivalente.');
