@@ -88,8 +88,17 @@ src = reemplazarUna(
 src = reemplazarUna(
   src,
   '      const mapa = new Map(existentes.map((x) => [x.clave, { ...x }]));',
-  '      const mapa = reemplazar ? new Map() : new Map(existentes.map((x) => [x.clave, { ...x }]));',
+  `      const mapaPrevio = new Map(existentes.map((x) => [x.clave, { ...x }]));
+      const mapa = reemplazar ? new Map() : new Map(mapaPrevio);`,
   'mapa incremental/completo'
+);
+src = reemplazarUna(
+  src,
+  `        const previa = mapa.get(clave);
+        if (!previa) nuevas += 1;`,
+  `        const previa = mapa.get(clave) || mapaPrevio.get(clave);
+        if (!mapaPrevio.has(clave) && !mapa.has(clave)) nuevas += 1;`,
+  'conteo real de empresas nuevas'
 );
 src = reemplazarUna(
   src,
@@ -139,7 +148,7 @@ const guardarNuevo = `    if (rango.completo) {
     });`;
 src = reemplazarUna(src, guardarViejo, guardarNuevo, 'guardado de sincronización completa');
 
-if (!src.includes(MARCA) || !src.includes('table.rows') || !src.includes('valueInputOption=RAW') || !src.includes('reemplazar: rango.completo') || !src.includes('const nuevasUltima')) {
+if (!src.includes(MARCA) || !src.includes('table.rows') || !src.includes('valueInputOption=RAW') || !src.includes('reemplazar: rango.completo') || !src.includes('const nuevasUltima') || !src.includes('const mapaPrevio')) {
   throw new Error('Directorio calidad v7.4c quedó incompleto.');
 }
 
