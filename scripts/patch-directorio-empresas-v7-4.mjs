@@ -20,6 +20,79 @@ directorio = directorio
     '    sesion = await crearSesion(cfg, logger);',
     "    const { crearSesion } = await import('./browser.js');\n    sesion = await crearSesion(cfg, logger);"
   );
+
+// BIOFILE no renderiza "Buscar" como <button>. En Clientes.aspx el control real
+// es un <td class="BHEnabledBuscar" onclick="BuscarDatosParaExcel(...)"> con una
+// imagen Buscar.png dentro. Se prioriza ese selector exacto y se conservan
+// fallbacks por si BIOFILE cambia nuevamente el HTML.
+const pulsarBuscarViejo = `async function pulsarBuscar(page) {
+  const candidatos = [
+    page.getByRole('button', { name: /buscar/i }),
+    page.locator('button:has-text("Buscar")'),
+    page.locator('input[type="submit"][value*="Buscar" i]'),
+    page.locator('[title*="Buscar" i]'),
+    page.locator('a:has-text("Buscar")')
+  ];
+  for (const loc of candidatos) {
+    if (await visible(loc)) {
+      await loc.first().click();
+      return;
+    }
+  }
+  const img = page.locator('img[alt*="Buscar" i], img[title*="Buscar" i]').first();
+  if (await visible(img)) {
+    await img.click();
+    return;
+  }
+  throw new Error('No se encontró el botón Buscar en Clientes de BIOFILE.');
+}`;
+
+const pulsarBuscarNuevo = `async function pulsarBuscar(page) {
+  const contextos = page.frames();
+  for (const ctx of contextos) {
+    const exactos = [
+      ctx.locator('td.BHEnabledBuscar[onclick*="BuscarDatosParaExcel"][onclick*="Lista-de-Clientes"]'),
+      ctx.locator('td[onclick*="BuscarDatosParaExcel"][onclick*="Lista-de-Clientes"]'),
+      ctx.locator('td.BHEnabledBuscar[onclick*="BuscarDatosParaExcel"]'),
+      ctx.locator('[onclick*="BuscarDatosParaExcel"]')
+    ];
+    for (const loc of exactos) {
+      if (await visible(loc)) {
+        await loc.first().click();
+        return;
+      }
+    }
+  }
+
+  for (const ctx of contextos) {
+    const candidatos = [
+      ctx.getByRole('button', { name: /buscar/i }),
+      ctx.locator('button:has-text("Buscar")'),
+      ctx.locator('input[type="submit"][value*="Buscar" i]'),
+      ctx.locator('[title*="Buscar" i]'),
+      ctx.locator('a:has-text("Buscar")')
+    ];
+    for (const loc of candidatos) {
+      if (await visible(loc)) {
+        await loc.first().click();
+        return;
+      }
+    }
+
+    const img = ctx.locator('img[src*="Buscar.png" i], img[alt*="Buscar" i], img[title*="Buscar" i]').first();
+    if (await visible(img)) {
+      const padre = img.locator('xpath=..');
+      if (await visible(padre)) await padre.click();
+      else await img.click();
+      return;
+    }
+  }
+  throw new Error('No se encontró el control Buscar de Clientes de BIOFILE.');
+}`;
+
+if (directorio.includes(pulsarBuscarViejo)) {
+  directorio = directorio.replace(pulsarBuscarViejo, pulsarBuscarNuevo);
+}
 fs.writeFileSync(directorioPath, directorio, 'utf8');
 
 if (server.includes(`/* ${MARCA} */`)) {
