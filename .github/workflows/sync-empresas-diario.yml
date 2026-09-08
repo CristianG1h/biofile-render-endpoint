@@ -1,0 +1,22 @@
+name: Despertar sincronización diaria de empresas
+
+on:
+  schedule:
+    # 13:15 UTC = 08:15 a. m. en Colombia (UTC-5, sin horario de verano).
+    - cron: '15 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  despertar-directorio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Despertar Render y disparar revisión si está pendiente
+        run: |
+          curl --fail --silent --show-error \
+            --retry 4 --retry-delay 15 --retry-all-errors \
+            --connect-timeout 30 --max-time 120 \
+            'https://biofile-render-endpoint.onrender.com/api/directorio/empresas?limit=1'
