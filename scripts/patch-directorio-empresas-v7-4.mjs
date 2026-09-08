@@ -1,8 +1,21 @@
 import fs from 'node:fs';
 
 const serverPath = new URL('../src/server.js', import.meta.url);
+const directorioPath = new URL('../src/directorio-empresas-biofile.js', import.meta.url);
 let server = fs.readFileSync(serverPath, 'utf8');
+let directorio = fs.readFileSync(directorioPath, 'utf8');
 const MARCA = 'DIRECTORIO_EMPRESAS_BIOFILE_V74';
+
+// Mantener el módulo importable en pruebas sin exigir Playwright instalado y
+// corregir el grant type JWT de Google antes de usar el directorio.
+directorio = directorio
+  .replace("import { crearSesion } from './browser.js';\n", '')
+  .replace("grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer'", "grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer'")
+  .replace(
+    '    sesion = await crearSesion(cfg, logger);',
+    "    const { crearSesion } = await import('./browser.js');\n    sesion = await crearSesion(cfg, logger);"
+  );
+fs.writeFileSync(directorioPath, directorio, 'utf8');
 
 if (server.includes(`/* ${MARCA} */`)) {
   console.log('[Directorio] v7.4 ya instalado.');
