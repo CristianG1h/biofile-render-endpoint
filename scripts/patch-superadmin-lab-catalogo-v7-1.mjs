@@ -1,5 +1,11 @@
 import fs from 'node:fs';
 
+// v7.8 se ejecuta aquí porque este parche ya forma parte de start/dev/test y
+// corre después de los parches de directorio y catálogo. Así la corrección se
+// aplica siempre antes de iniciar el servidor, incluso si el laboratorio v7.1
+// ya estaba instalado en src/server.js.
+await import('./patch-directorio-paquetes-v7-8.mjs');
+
 const serverPath = new URL('../src/server.js', import.meta.url);
 let server = fs.readFileSync(serverPath, 'utf8');
 
