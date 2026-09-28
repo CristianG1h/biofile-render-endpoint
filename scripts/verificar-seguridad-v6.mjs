@@ -10,7 +10,7 @@ const archivos = {
 
 const contenido = Object.fromEntries(Object.entries(archivos).map(([k, u]) => [k, fs.readFileSync(u, 'utf8')]));
 const pruebas = [
-  ['sesión BIOFILE limpia', contenido.browser.includes('/* SESION_LIMPIA_V6 */')],
+  ['sesión BIOFILE aislada y vinculada a credenciales', contenido.browser.includes('realBrowser.newContext') && contenido.browser.includes('saved?.version === version') && contenido.browser.includes('accountTails.set(account, tail)')],
   ['guardado confirmado no revierte', contenido.biofile.includes('/* GUARDADO_CONFIRMADO_V6 */')],
   ['idempotencia persistente', contenido.sheets.includes('/* IDEMPOTENCIA_BIOFILE_V6 */')],
   ['estado REVISAR_BIOFILE', contenido.sheets.includes("'REVISAR_BIOFILE'")],

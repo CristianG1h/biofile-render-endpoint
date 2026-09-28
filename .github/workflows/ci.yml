@@ -12,7 +12,7 @@ permissions:
 jobs:
   seguridad-y-sintaxis:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,5 +20,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Instalar dependencias
+        run: npm ci
       - name: Ejecutar pruebas de seguridad
         run: npm test

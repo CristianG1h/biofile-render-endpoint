@@ -1,3 +1,4 @@
+import { execution } from './jobs/execution.js';
 /*
  * Capa de resiliencia para las llamadas HTTP hechas por Node desde Render.
  *
@@ -60,7 +61,7 @@ function puedeReintentar(input, init, url, metodo) {
 
   // Las escrituras que hace este servicio a Google son idempotentes en la
   // práctica: token OAuth o actualización del mismo rango/valor de Sheets.
-  if (hostGoogle(url.hostname) && ['POST', 'PUT', 'PATCH'].includes(metodo)) {
+  if (hostGoogle(url.hostname) && (['PUT', 'PATCH'].includes(metodo) || (metodo === 'POST' && (url.pathname === '/token' || url.pathname.endsWith('/values:batchUpdate'))))) {
     const body = init.body ?? input?.body ?? null;
     return cuerpoReutilizable(body);
   }
@@ -69,6 +70,8 @@ function puedeReintentar(input, init, url, metodo) {
 }
 
 function combinarSenal(senalOriginal) {
+  const scopeSignal = execution.getStore()?.signal;
+  if (scopeSignal) senalOriginal = senalOriginal ? AbortSignal.any([senalOriginal, scopeSignal]) : scopeSignal;
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
   if (!senalOriginal) return timeout;
   if (senalOriginal.aborted) return senalOriginal;
@@ -134,7 +137,7 @@ async function fetchResiliente(input, init = {}) {
       ultimoError = error;
 
       // Si el llamador abortó su propia señal, no se debe reintentar.
-      if (init.signal?.aborted || input?.signal?.aborted) throw error;
+      if (init.signal?.aborted || input?.signal?.aborted || execution.getStore()?.signal.aborted) throw error;
 
       if (!reintentable || intento >= maxIntentos) {
         throw errorFinal(error, url, intento);

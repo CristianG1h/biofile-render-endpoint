@@ -1,3 +1,9 @@
+import { reconcileLegacy } from './jobs/recovery.js';
+import { purgeDiagnostics } from './diagnostic-store.js';
+import { JobStore } from './jobs/job-store.js';
+import { JobService } from './jobs/job-service.js';
+import { createNationalApi } from './nacionales/index.js';
+import { cerrarNavegador } from './browser.js';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { config, validarConfiguracion } from './config.js';
@@ -5,9 +11,29 @@ import { BaseGoogleSheets } from './google-sheets.js';
 import { procesarRegistroBiofile } from './procesar-registro.js';
 import { notificarExperiencia } from './experiencia.js';
 import { UsuariosBiofileStore, normalizarUsuario } from './usuarios-store.js';
+import { DirectorioEmpresasBiofileStore, sincronizarEmpresasDesdeBiofile } from './directorio-empresas-biofile.js';
+import { CatalogoPaquetesBiofileStore, TIPOS_EVALUACION_BIOFILE, claveEmpresaCatalogo, normalizarTipoEvaluacion } from './catalogo-paquetes-biofile.js';
+import { investigarPaquetesEmpresaBiofile } from './investigar-paquetes-biofile.js';
 
-const jobs = new Map();
-const colasUsuarios = new Map();
+const jobService = new JobService(new JobStore(config.google));
+const jobs = jobService.jobs;
+let jobsError = null;
+const jobsReady = jobService.init().then(async () => { await reconcileLegacy(await cargarBase(), jobs); }).catch(error => { jobsError = error; console.error('[JOBS] Persistencia no disponible; nuevos envíos bloqueados.'); });
+jobService.onSettled = async job => {
+  await usuariosStore.registrarAuditoria(job.usuarioNombre, job.estado === 'completado' ? 'INGRESO_AUTOMATICO_COMPLETADO' : 'INGRESO_AUTOMATICO_ERROR', job.documento || '', `Job: ${job.id} | Estado: ${job.estado} | Orden: ${job.numeroOrden || ''}`).catch(() => { job.auditoriaPendiente = true; });
+  if (job.kind !== 'legacy-job' || !job.fila || job.estado === 'completado') return;
+  const base = await new BaseGoogleSheets({ ...config.google, logger:null }).cargar({ fila:job.fila });
+  await base.actualizarCampos(job.fila, {
+    ESTADO_BIOFILE:job.numeroOrden || job.guardadoConfirmado ? 'PARCIAL' : job.guardadoIntentado ? 'REVISAR_BIOFILE' : job.estado === 'interrumpido' ? 'INTERRUMPIDO' : 'ERROR',
+    NUMERO_OS_BIOFILE:job.numeroOrden || '',
+    ERROR_BIOFILE:job.error?.mensaje || 'Trabajo interrumpido',
+    GUARDADO_INTENTADO_BIOFILE:job.guardadoIntentado?'SI':'NO',
+    ULTIMA_ETAPA_BIOFILE:job.etapa,
+    JOB_ID_BIOFILE:job.id
+  });
+};
+async function requireJobs() { await jobsReady; if (jobsError) throw Object.assign(new Error('Persistencia de trabajos no disponible. Revise la configuración de Google Sheets.'), { statusCode: 503 }); }
+const nationalApi = createNationalApi({ service: jobService, ready: jobsReady, send: responderJson, companies: async () => directorioEmpresasStore.listar(), screenshotsRoot: config.paths.screenshots });
 const sesiones = new Map();
 let servidor;
 
@@ -17,6 +43,171 @@ const usuariosStore = new UsuariosBiofileStore({
   hojaAuditoria: config.usuariosStore.hojaAuditoria,
   encryptionKey: config.seguridad.encryptionKey
 });
+
+
+/* CATALOGO_PAQUETES_BIOFILE_V7_SERVER */
+const catalogoStore = new CatalogoPaquetesBiofileStore({
+  google: config.google,
+  hojaEmpresas: process.env.BIOFILE_CATALOG_EMPRESAS_SHEET || 'CATALOGO_EMPRESAS_BIOFILE',
+  hojaPaquetes: process.env.BIOFILE_CATALOG_PAQUETES_SHEET || 'CATALOGO_PAQUETES_BIOFILE',
+  ttlMs: Number(process.env.BIOFILE_CATALOG_TTL_MS || 24 * 60 * 60 * 1000)
+});
+const investigacionesCatalogo = new Map();
+let colaGlobalCatalogo = Promise.resolve();
+const CATALOGO_REINTENTO_ERROR_MS = Number(process.env.BIOFILE_CATALOG_ERROR_RETRY_MS || 15 * 60 * 1000);
+
+function usuarioCatalogoAutomatico() {
+  const usuarioDirecto = String(process.env.BIOFILE_CATALOG_USER || '').trim();
+  const passwordDirecto = String(process.env.BIOFILE_CATALOG_PASSWORD || process.env.BIOFILE_CATALOG_PASS || '');
+  if (usuarioDirecto && passwordDirecto) {
+    return {
+      id: 'env_catalogo',
+      usuario: usuarioDirecto,
+      contrasena: passwordDirecto,
+      rol: 'admin',
+      activo: true,
+      fuente: 'render-catalogo'
+    };
+  }
+
+  const candidatos = [...config.usuariosEntorno].sort((a, b) => {
+    const peso = (u) => u.rol === 'superadmin' ? 0 : u.rol === 'admin' ? 1 : 2;
+    return peso(a) - peso(b);
+  });
+  return candidatos[0] || null;
+}
+
+function programarInvestigacionCatalogo(empresa, { force = false, usuarioPreferido = null } = {}) {
+  const nombre = String(empresa || '').trim();
+  const clave = claveEmpresaCatalogo(nombre);
+  if (!clave) return Promise.reject(new Error('La empresa es obligatoria.'));
+
+  const activa = investigacionesCatalogo.get(clave);
+  if (activa) return activa;
+  if (investigacionesCatalogo.size >= 25) {
+    return Promise.reject(new Error('La cola de actualización del catálogo está temporalmente llena.'));
+  }
+
+  const ejecutar = async () => {
+    const actual = await catalogoStore.obtener(nombre).catch(() => null);
+    const errorReciente = String(actual?.estado || '').toUpperCase() === 'ERROR' &&
+      Date.now() - (Date.parse(actual?.ultimaRevisionIso || '') || 0) < CATALOGO_REINTENTO_ERROR_MS;
+    if ((actual?.fresca || errorReciente) && !force) return actual;
+
+    const usuario = usuarioPreferido?.usuario && usuarioPreferido?.contrasena
+      ? usuarioPreferido
+      : usuarioCatalogoAutomatico();
+
+    if (!usuario) {
+      throw new Error('No hay un usuario BIOFILE disponible en Render para actualizar el catálogo.');
+    }
+
+    const investigacion = await investigarPaquetesEmpresaBiofile({
+      empresa: actual?.acuerdoExacto || nombre,
+      usuario
+    });
+
+    return catalogoStore.guardarInvestigacion({
+      empresaBuscada: nombre,
+      acuerdoExacto: investigacion.acuerdoExacto || actual?.acuerdoExacto || nombre,
+      paquetes: investigacion.paquetes,
+      estado: 'OK',
+      error: ''
+    });
+  };
+
+  // Las investigaciones se serializan globalmente. Así un formulario público
+  // no puede abrir decenas de navegadores BIOFILE al mismo tiempo.
+  const promesa = colaGlobalCatalogo
+    .catch(() => {})
+    .then(ejecutar)
+    .catch(async (error) => {
+      console.error('[CATALOGO] Error investigando "' + nombre + '":', error.message);
+      await catalogoStore.guardarError(nombre, error).catch(() => {});
+      throw error;
+    })
+    .finally(() => {
+      if (investigacionesCatalogo.get(clave) === promesa) investigacionesCatalogo.delete(clave);
+    });
+
+  colaGlobalCatalogo = promesa.catch(() => {});
+  investigacionesCatalogo.set(clave, promesa);
+  return promesa;
+}
+
+function precargarCatalogoSinEsperar(empresa, opciones = {}) {
+  programarInvestigacionCatalogo(empresa, opciones).catch(() => {});
+}
+
+/* DIRECTORIO_EMPRESAS_BIOFILE_V74 */
+const directorioEmpresasStore = new DirectorioEmpresasBiofileStore({ google: config.google });
+let sincronizacionEmpresasActiva = null;
+const DIRECTORIO_SYNC_INTERVAL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.BIOFILE_CLIENTES_SYNC_INTERVAL_MS || 24 * 60 * 60 * 1000)
+);
+
+function usuarioDirectorioEmpresas(preferido = null) {
+  if (preferido?.usuario && preferido?.contrasena) return preferido;
+  return typeof usuarioCatalogoAutomatico === 'function' ? usuarioCatalogoAutomatico() : (config.usuariosEntorno[0] || null);
+}
+
+/* DIRECTORIO_EMPRESAS_DIARIO_V74B */
+function diaBogotaDirectorio(fecha = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(fecha);
+}
+
+function proximoDiaBogotaIso() {
+  const hoy = diaBogotaDirectorio(new Date());
+  const [y, m, d] = hoy.split('-').map(Number);
+  // Colombia permanece en UTC-5: 00:05 local equivale a 05:05 UTC.
+  return new Date(Date.UTC(y, m - 1, d + 1, 5, 5, 0)).toISOString();
+}
+
+async function directorioVencido() {
+  const estado = await directorioEmpresasStore.obtenerEstado().catch(() => ({}));
+  const ultimo = Date.parse(estado.ultimoExitoIso || '') || 0;
+  const cambioDeDia = !ultimo || diaBogotaDirectorio(new Date(ultimo)) !== diaBogotaDirectorio(new Date());
+  const superoIntervalo = !ultimo || Date.now() - ultimo >= DIRECTORIO_SYNC_INTERVAL_MS;
+  return { estado, vencido: cambioDeDia || superoIntervalo };
+}
+
+function programarSincronizacionEmpresas({ force = false, completo = false, usuarioPreferido = null } = {}) {
+  if (sincronizacionEmpresasActiva) return sincronizacionEmpresasActiva;
+  sincronizacionEmpresasActiva = (async () => {
+    const control = await directorioVencido();
+    if (!force && !control.vencido) return { omitida: true, motivo: 'directorio_fresco', estado: control.estado };
+    const usuario = usuarioDirectorioEmpresas(usuarioPreferido);
+    if (!usuario) throw new Error('No hay un usuario BIOFILE disponible para actualizar el directorio de empresas.');
+    const usarCompleto = completo || !control.estado?.ultimoExitoIso;
+    console.log('[CLIENTES] Iniciando sincronización ' + (usarCompleto ? 'completa' : 'incremental') + '.');
+    const resultado = await sincronizarEmpresasDesdeBiofile({ usuario, store: directorioEmpresasStore, completo: usarCompleto });
+    console.log('[CLIENTES] Sincronización terminada:', resultado.totalEmpresas, 'empresas; nuevas:', resultado.nuevas);
+    return resultado;
+  })().finally(() => { sincronizacionEmpresasActiva = null; });
+  return sincronizacionEmpresasActiva;
+}
+
+async function estadoDirectorioEmpresas() {
+  const estado = await directorioEmpresasStore.obtenerEstado();
+  return {
+    ...estado,
+    sincronizando: Boolean(sincronizacionEmpresasActiva),
+    intervaloMs: DIRECTORIO_SYNC_INTERVAL_MS,
+    proximaRevisionIso: estado.ultimoExitoIso
+      ? (() => {
+          const porIntervalo = new Date((Date.parse(estado.ultimoExitoIso) || Date.now()) + DIRECTORIO_SYNC_INTERVAL_MS).getTime();
+          const porDia = Date.parse(proximoDiaBogotaIso());
+          return new Date(Math.min(porIntervalo, porDia)).toISOString();
+        })()
+      : ''
+  };
+}
 
 const CAMPOS_EDITABLES = new Set([
   'Tipo doc', 'N° documento', 'Ciudad nacimiento', 'Fecha nacimiento',
@@ -72,7 +263,7 @@ function aplicarCors(req, res) {
   if (permitido) {
     res.setHeader('Access-Control-Allow-Origin', permitido);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
@@ -127,24 +318,14 @@ async function buscarCredenciales(nombre, contrasena) {
 }
 
 function autenticar(req) {
+  /* AUTH_BEARER_ONLY_V6 */
   limpiarSesiones();
   const token = extraerBearer(req);
-  if (token) {
-    const sesion = sesiones.get(token);
-    if (sesion && sesion.expiraEn > Date.now() && sesion.usuario) {
-      sesion.expiraEn = Date.now() + config.api.sessionTtlMs;
-      return { usuario: sesion.usuario, token, legado: false };
-    }
-  }
-
-  // Compatibilidad temporal con el panel anterior que usaba X-API-Key.
-  const apiKey = extraerApiKey(req);
-  if (config.api.key && apiKey && comparacionSegura(apiKey, config.api.key)) {
-    const usuario = config.usuariosEntorno[0] || null;
-    if (usuario) return { usuario, token: '', legado: true };
-  }
-
-  return null;
+  if (!token) return null;
+  const sesion = sesiones.get(token);
+  if (!sesion || sesion.expiraEn <= Date.now() || !sesion.usuario) return null;
+  sesion.expiraEn = Date.now() + config.api.sessionTtlMs;
+  return { usuario: sesion.usuario, token, legado: false };
 }
 
 function crearSesionPanel(usuario) {
@@ -184,6 +365,11 @@ function documentoValido(valor) {
   return /^[A-Za-z0-9.\-\s]{4,30}$/.test(String(valor || '').trim());
 }
 
+/* DOCUMENTO_CLAVE_V6 */
+function documentoClave(valor) {
+  return String(valor || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
 function jobPublico(job) {
   if (!job) return null;
   return {
@@ -192,6 +378,9 @@ function jobPublico(job) {
     documento: job.documento,
     fila: job.fila,
     subirImagenes: job.subirImagenes,
+    empresaCatalogo: job.empresaCatalogo || '',
+    tipoEvaluacion: job.tipoEvaluacion || TIPOS_EVALUACION_BIOFILE[0],
+    paquete: job.paquete || 'NO APLICA',
     usuario: {
       id: job.usuarioId,
       nombre: job.usuarioNombre
@@ -199,68 +388,25 @@ function jobPublico(job) {
     creadoEn: job.creadoEn,
     iniciadoEn: job.iniciadoEn || null,
     finalizadoEn: job.finalizadoEn || null,
+    ultimaActividad: job.ultimaActividad || null,
+    duracion: job.duracion || (job.iniciadoEn ? Date.now() - Date.parse(job.iniciadoEn) : 0),
+    reintentable: Boolean(job.reintentable),
+    ultimoPasoEjecutado: job.ultimoPasoEjecutado || '',
+    guardadoIntentado: Boolean(job.guardadoIntentado),
+    metrics: job.metrics || {},
     resultado: job.resultado || null,
-    error: job.error || null
+    error: job.error || null,
+    /* JOB_PUBLIC_PROGRESS_V1 */
+    progreso: Number(job.progreso || 0),
+    etapa: job.etapa || '',
+    detalle: job.detalle || '',
+    numeroOrden: job.numeroOrden || job.resultado?.numeroOrden || job.error?.numeroOrden || ''
   };
 }
 
-function encolar({ documento, fila, subirImagenes, usuario }) {
-  limpiarJobsAntiguos();
-
-  const duplicado = [...jobs.values()].find((job) =>
-    job.documento === documento && ['en_cola', 'procesando'].includes(job.estado)
-  );
-  if (duplicado) return { job: duplicado, duplicado: true };
-
-  const id = crypto.randomUUID();
-  const job = {
-    id,
-    estado: 'en_cola',
-    documento,
-    fila,
-    subirImagenes,
-    usuarioId: usuario.id,
-    usuarioNombre: usuario.usuario,
-    creadoEn: ahoraIso(),
-    iniciadoEn: null,
-    finalizadoEn: null,
-    resultado: null,
-    error: null
-  };
-  jobs.set(id, job);
-
-  const colaAnterior = colasUsuarios.get(usuario.id) || Promise.resolve();
-  const nuevaCola = colaAnterior
-    .catch(() => {})
-    .then(async () => {
-      job.estado = 'procesando';
-      job.iniciadoEn = ahoraIso();
-      try {
-        job.resultado = await procesarRegistroBiofile({
-          documento: job.documento,
-          fila: job.fila,
-          subirImagenes: job.subirImagenes,
-          jobId: job.id,
-          usuario
-        });
-        job.estado = 'completado';
-      } catch (error) {
-        job.estado = 'error';
-        job.error = {
-          mensaje: error.message,
-          ...(error.detalle || {})
-        };
-      } finally {
-        job.finalizadoEn = ahoraIso();
-      }
-    });
-
-  colasUsuarios.set(usuario.id, nuevaCola);
-  nuevaCola.finally(() => {
-    if (colasUsuarios.get(usuario.id) === nuevaCola) colasUsuarios.delete(usuario.id);
-  }).catch(() => {});
-
-  return { job, duplicado: false };
+async function encolar({ usuario, ...input }) {
+  await requireJobs();
+  return jobService.enqueue({ ...input, kind: 'legacy-job' }, usuario, ({ usuario, job, onProgress }) => procesarRegistroBiofile({ ...input, jobId: job.id, usuario, onProgress }));
 }
 
 function trabajosActivosPorUsuario() {
@@ -304,6 +450,28 @@ function usuarioRenderPublico(u) {
   };
 }
 
+/* OPERACION_API_V5 */
+async function resolverUsuarioResponsable(actor, solicitado = '') {
+  const nombre = String(solicitado || '').trim();
+  if (!nombre) return actor.usuario;
+  if (actor.rol !== 'superadmin') {
+    if (normalizarUsuario(nombre) !== normalizarUsuario(actor.usuario)) {
+      throw new Error('Solo un Super Admin puede atribuir un ingreso manual a otro usuario.');
+    }
+    return actor.usuario;
+  }
+
+  const administrados = usuariosStore.disponible() ? await usuariosStore.listar() : [];
+  const candidatos = [
+    ...config.usuariosEntorno.map((u) => ({ usuario: u.usuario, activo: u.activo !== false })),
+    ...administrados
+  ];
+  const encontrado = candidatos.find((u) => normalizarUsuario(u.usuario) === normalizarUsuario(nombre));
+  if (!encontrado) throw new Error('El usuario responsable indicado no existe.');
+  if (encontrado.activo === false) throw new Error('El usuario responsable está inactivo.');
+  return encontrado.usuario;
+}
+
 async function manejar(req, res) {
   if (req.method === 'OPTIONS') {
     aplicarCors(req, res);
@@ -325,6 +493,40 @@ async function manejar(req, res) {
       cola: [...jobs.values()].filter((j) => ['en_cola', 'procesando'].includes(j.estado)).length,
       colasPorUsuario: trabajosActivosPorUsuario(),
       hora: ahoraIso()
+    });
+    return;
+  }
+
+
+  if (req.method === 'POST' && url.pathname === '/api/catalogo/precargar') {
+    const body = await leerJson(req);
+    const empresa = String(body.empresa || '').trim();
+    if (empresa.length < 3 || empresa.length > 180) {
+      responderJson(req, res, 400, { ok: false, error: 'El nombre de la empresa no es válido.' });
+      return;
+    }
+    precargarCatalogoSinEsperar(empresa);
+    responderJson(req, res, 202, {
+      ok: true,
+      empresa,
+      mensaje: 'Empresa recibida. El catálogo se actualizará en segundo plano si hace falta.'
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/directorio/empresas') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const q = String(url.searchParams.get('q') || '').trim();
+    const limit = Math.max(1, Math.min(25, Number(url.searchParams.get('limit') || 10)));
+    const control = await directorioVencido().catch(() => ({ estado: {}, vencido: false }));
+    if (control.vencido) programarSincronizacionEmpresas({ force: false }).catch((error) => console.warn('[CLIENTES] Actualización automática:', error.message));
+    const empresas = await directorioEmpresasStore.buscar(q, limit);
+    responderJson(req, res, 200, {
+      ok: true,
+      empresas,
+      totalEmpresas: Number(control.estado?.totalEmpresas || 0),
+      ultimoExitoIso: control.estado?.ultimoExitoIso || '',
+      sincronizando: Boolean(sincronizacionEmpresasActiva)
     });
     return;
   }
@@ -356,6 +558,7 @@ async function manejar(req, res) {
     return;
   }
   const usuario = autenticacion.usuario;
+  if (url.pathname.startsWith('/api/nacionales/')) { await requireJobs(); if (await nationalApi(req,res,url,usuario)) return; }
 
   if (req.method === 'GET' && url.pathname === '/api/auth/me') {
     responderJson(req, res, 200, { ok: true, usuario: usuarioPublico(usuario) });
@@ -368,6 +571,215 @@ async function manejar(req, res) {
     return;
   }
 
+
+  if (req.method === 'GET' && url.pathname === '/api/superadmin/directorio/estado') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede consultar el directorio de empresas.' });
+      return;
+    }
+    responderJson(req, res, 200, { ok: true, directorio: await estadoDirectorioEmpresas() });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/superadmin/directorio/sincronizar') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede actualizar el directorio de empresas.' });
+      return;
+    }
+    const body = await leerJson(req);
+    if (!sincronizacionEmpresasActiva) {
+      programarSincronizacionEmpresas({
+        force: true,
+        completo: body.completo === true,
+        usuarioPreferido: usuario
+      }).catch((error) => console.error('[CLIENTES] Sincronización manual:', error.message));
+    }
+    responderJson(req, res, 202, {
+      ok: true,
+      sincronizando: true,
+      mensaje: body.completo === true
+        ? 'Sincronización completa iniciada.'
+        : 'Actualización de empresas iniciada.'
+    });
+    return;
+  }
+
+
+  if (req.method === 'GET' && url.pathname === '/api/catalogo/empresa') {
+    const empresa = String(url.searchParams.get('empresa') || '').trim();
+    if (empresa.length < 3) {
+      responderJson(req, res, 400, { ok: false, error: 'Indica el nombre de la empresa.' });
+      return;
+    }
+
+    const catalogo = await catalogoStore.obtener(empresa);
+    const errorReciente = String(catalogo?.estado || '').toUpperCase() === 'ERROR' &&
+      Date.now() - (Date.parse(catalogo?.ultimaRevisionIso || '') || 0) < CATALOGO_REINTENTO_ERROR_MS;
+    const actualizando = !catalogo?.fresca && !errorReciente;
+    if (actualizando) precargarCatalogoSinEsperar(empresa, { usuarioPreferido: usuario });
+
+    responderJson(req, res, 200, {
+      ok: true,
+      empresa,
+      catalogo,
+      actualizando,
+      tiposEvaluacion: TIPOS_EVALUACION_BIOFILE
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/catalogo/refrescar') {
+    const body = await leerJson(req);
+    const empresa = String(body.empresa || '').trim();
+    if (empresa.length < 3) {
+      responderJson(req, res, 400, { ok: false, error: 'Indica el nombre de la empresa.' });
+      return;
+    }
+    precargarCatalogoSinEsperar(empresa, { force: true, usuarioPreferido: usuario });
+    responderJson(req, res, 202, { ok: true, empresa, actualizando: true });
+    return;
+  }
+
+  /* LISTADO_API_V61 */
+  if (req.method === 'GET' && url.pathname === '/api/biofile/trabajos') {
+    await requireJobs(); responderJson(req,res,200,{ok:true,jobs:[...jobs.values()].filter(j=>j.kind==='legacy-job' && j.usuarioId===usuario.id).map(jobPublico)}); return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/registros/listar') {
+    const base = await cargarBase();
+    const registros = base.listarRegistros({ busqueda: url.searchParams.get('busqueda') || '' });
+    responderJson(req, res, 200, { ok: true, registros });
+    return;
+  }
+
+  /* CONCILIACION_BIOFILE_V64 */
+  if (req.method === 'POST' && url.pathname === '/api/registros/verificar-biofile') {
+    const body = await leerJson(req);
+    const documento = String(body.documento || '').trim();
+    const fila = Number(body.fila || 0);
+    const filaValida = Number.isInteger(fila) && fila >= 2;
+    if (!filaValida && !documentoValido(documento)) {
+      responderJson(req, res, 400, { ok: false, error: 'Documento o fila no válidos.' });
+      return;
+    }
+
+    const clave = documentoClave(documento);
+    const activo = [...jobs.values()].find((j) => documentoClave(j.documento) === clave && ['en_cola', 'procesando'].includes(j.estado));
+    if (activo) {
+      responderJson(req, res, 409, { ok: false, error: 'Este paciente está en cola o procesándose. Espere a que termine antes de verificarlo.' });
+      return;
+    }
+
+    try {
+      const base = await cargarBase();
+      const registros = base.listarRegistros({ busqueda: '' });
+      const registro = registros.find((r) => {
+        const filaRegistro = Number(r?._FILA_SHEETS || 0);
+        if (filaValida) return filaRegistro === fila;
+        return documentoClave(r?.['N° documento']) === clave;
+      });
+      if (!registro) {
+        responderJson(req, res, 404, { ok: false, error: 'No se encontró esa visita en Google Sheets.' });
+        return;
+      }
+
+      const row = Number(registro._FILA_SHEETS);
+      const docRegistro = String(registro['N° documento'] || documento).trim();
+      const estado = String(registro.ESTADO_BIOFILE || '').trim().toUpperCase();
+      const numeroOrden = String(registro.NUMERO_OS_BIOFILE || '').trim();
+      const guardadoConfirmado = String(registro.GUARDADO_CONFIRMADO_BIOFILE || '').trim().toUpperCase();
+      const modo = String(registro.MODO_INGRESO_BIOFILE || 'AUTOMATICO').trim().toUpperCase() || 'AUTOMATICO';
+      const responsable = String(registro.USUARIO_BIOFILE || usuario.usuario).trim() || usuario.usuario;
+
+      if (estado === 'COMPLETADO') {
+        responderJson(req, res, 200, { ok: true, conciliado: true, yaCompletado: true, fila: row, documento: docRegistro, numeroOrden, modo, mensaje: 'Este paciente ya figura como completado.' });
+        return;
+      }
+
+      const evidenciaOrden = Boolean(numeroOrden) || guardadoConfirmado === 'SI' || ['ORDEN_CREADA', 'PARCIAL'].includes(estado);
+      if (evidenciaOrden) {
+        await base.marcarCompletado(row, numeroOrden, responsable, modo);
+        await usuariosStore.registrarAuditoria(
+          usuario.usuario,
+          'CONCILIACION_BIOFILE',
+          docRegistro,
+          'Fila ' + row + '; evidencia: ' + (numeroOrden ? 'O.S. ' + numeroOrden : guardadoConfirmado === 'SI' ? 'guardado confirmado' : estado)
+        ).catch(() => {});
+        responderJson(req, res, 200, {
+          ok: true, conciliado: true, yaCompletado: false, fila: row, documento: docRegistro, numeroOrden, modo,
+          mensaje: numeroOrden
+            ? 'Se encontró la O.S. ' + numeroOrden + ' y el registro fue movido a Ingresados.'
+            : 'Se encontró evidencia de un guardado confirmado y el registro fue movido a Ingresados.'
+        });
+        return;
+      }
+
+      responderJson(req, res, 200, {
+        ok: true, conciliado: false, fila: row, documento: docRegistro, requiereConfirmacionManual: true,
+        mensaje: 'No hay una O.S. ni un guardado confirmado que permitan conciliar automáticamente. Si ya fue ingresado manualmente en BIOFILE, confirma el ingreso manual y el responsable.'
+      });
+    } catch (error) {
+      responderJson(req, res, Number(error.statusCode || 400), { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  /* SUPERADMIN_LAB_CATALOGO_V71 */
+  if (req.method === 'GET' && url.pathname === '/api/superadmin/catalogo/actual') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un Super Admin puede usar el laboratorio BIOFILE.' });
+      return;
+    }
+
+    const empresa = String(url.searchParams.get('empresa') || '').trim();
+    if (empresa.length < 3) {
+      responderJson(req, res, 400, { ok: false, error: 'Indica una empresa válida.' });
+      return;
+    }
+
+    const catalogo = await catalogoStore.obtener(empresa);
+    responderJson(req, res, 200, { ok: true, empresa, catalogo, encontrado: Boolean(catalogo) });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/superadmin/catalogo/probar') {
+    if (!requiereRol(usuario, ['superadmin'])) {
+      responderJson(req, res, 403, { ok: false, error: 'Solo un Super Admin puede usar el laboratorio BIOFILE.' });
+      return;
+    }
+
+    const body = await leerJson(req);
+    const empresa = String(body.empresa || '').trim();
+    const guardar = body.guardar === true;
+    if (empresa.length < 3 || empresa.length > 180) {
+      responderJson(req, res, 400, { ok: false, error: 'Indica una empresa válida.' });
+      return;
+    }
+
+    const inicio = Date.now();
+    const previo = await catalogoStore.obtener(empresa).catch(() => null);
+    try {
+      const investigacion = await investigarPaquetesEmpresaBiofile({ empresa: previo?.acuerdoExacto || empresa, usuario });
+      let catalogoGuardado = previo;
+      if (guardar) {
+        catalogoGuardado = await catalogoStore.guardarInvestigacion({
+          empresaBuscada: empresa,
+          acuerdoExacto: investigacion.acuerdoExacto || empresa,
+          paquetes: investigacion.paquetes,
+          estado: 'OK',
+          error: ''
+        });
+      }
+      responderJson(req, res, 200, {
+        ok: true, empresa, guardar, duracionMs: Date.now() - inicio, previo, investigacion, catalogoGuardado
+      });
+    } catch (error) {
+      responderJson(req, res, 422, {
+        ok: false, empresa, guardar, duracionMs: Date.now() - inicio, error: error.message, previo,
+        detalleCatalogo: error.detalleCatalogo || null, detalleProductoServicio: error.detalleProductoServicio || null
+      });
+    }
+    return;
+  }
   if (url.pathname === '/api/superadmin/usuarios' && req.method === 'GET') {
     if (!requiereRol(usuario, ['superadmin'])) {
       responderJson(req, res, 403, { ok: false, error: 'Solo un superadministrador puede gestionar usuarios.' });
@@ -434,7 +846,7 @@ async function manejar(req, res) {
       return;
     }
     const actualizado = await usuariosStore.actualizar(matchUsuarioAdmin[1], body, usuario.usuario);
-    if (actualizado.activo === false) invalidarSesionesUsuario(actualizado.id);
+    invalidarSesionesUsuario(actualizado.id);
     responderJson(req, res, 200, { ok: true, usuario: actualizado });
     return;
   }
@@ -456,6 +868,8 @@ async function manejar(req, res) {
   if (req.method === 'PATCH' && url.pathname === '/api/registros/actualizar') {
     const body = await leerJson(req);
     const documento = String(body.documento || '').trim();
+    const fila = Number(body.fila || 0);
+    const filaValida = Number.isInteger(fila) && fila >= 2;
     const campo = String(body.campo || '').trim();
     let valor = body.valor === null || body.valor === undefined ? '' : String(body.valor).trim();
 
@@ -470,7 +884,13 @@ async function manejar(req, res) {
     if (campo === 'Estrato' && !valor) valor = '1';
 
     const base = await cargarBase();
-    const resultado = await base.actualizarCampoPorDocumento(documento, campo, valor);
+    let resultado;
+    if (filaValida) {
+      await base.actualizarCampos(fila, { [campo]: valor });
+      resultado = { row: fila, campo, valor };
+    } else {
+      resultado = await base.actualizarCampoPorDocumento(documento, campo, valor);
+    }
     responderJson(req, res, 200, { ok: true, ...resultado, actualizadoPor: usuarioPublico(usuario) });
     return;
   }
@@ -478,38 +898,78 @@ async function manejar(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/registros/marcar-manual') {
     const body = await leerJson(req);
     const documento = String(body.documento || '').trim();
+    const fila = Number(body.fila || 0);
+    const filaValida = Number.isInteger(fila) && fila >= 2;
     if (!documentoValido(documento)) {
       responderJson(req, res, 400, { ok: false, error: 'Documento no válido.' });
       return;
     }
+    try {
+      const responsable = await resolverUsuarioResponsable(usuario, body.usuarioResponsable);
+      const base = await cargarBase();
+      const [registroExperiencia] = base.obtenerPendientes({ max: 1, documento, fila: filaValida ? fila : 0 });
+      const fechaExperienciaIso = new Date().toISOString();
+      const resultado = filaValida
+        ? await base.marcarCompletadoManualFila(fila, responsable, usuario.usuario)
+        : await base.marcarCompletadoManual(documento, responsable, usuario.usuario);
+      /* AUDITORIA_OPERATIVA_V5 */
+      await usuariosStore.registrarAuditoria(usuario.usuario, 'INGRESO_MANUAL', documento, 'Atribuido a: ' + responsable).catch(() => {});
+      /* EXPERIENCIA_MANUAL_V1 */
+      const experiencia = registroExperiencia
+        ? await notificarExperiencia({
+            registro: registroExperiencia,
+            numeroOrden: '',
+            usuario: responsable,
+            modoIngreso: 'MANUAL',
+            fechaIngresoBiofileIso: fechaExperienciaIso
+          })
+        : { ok: false, omitido: true, motivo: 'No se encontró registro pendiente para programar la encuesta.' };
+      responderJson(req, res, 200, {
+        ok: true,
+        documento,
+        fila: resultado.row,
+        usuario: usuarioPublico(usuario),
+        atribuidoA: responsable,
+        registradoPor: usuario.usuario,
+        modo: 'MANUAL',
+        experiencia
+      });
+    } catch (error) {
+      responderJson(req, res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
 
-    const base = await cargarBase();
-    const [registroExperiencia] = base.obtenerPendientes({ max: 1, documento });
-    const fechaExperienciaIso = new Date().toISOString();
-    const resultado = await base.marcarCompletadoManual(documento, usuario.usuario);
-
-    const experiencia = registroExperiencia
-      ? await notificarExperiencia({
-          registro: registroExperiencia,
-          numeroOrden: '',
-          usuario: usuario.usuario,
-          modoIngreso: 'MANUAL',
-          fechaIngresoBiofileIso: fechaExperienciaIso
-        })
-      : {
-          ok: false,
-          omitido: true,
-          motivo: 'No se encontró un registro pendiente para programar la encuesta.'
-        };
-
-    responderJson(req, res, 200, {
-      ok: true,
-      documento,
-      fila: resultado.row,
-      usuario: usuarioPublico(usuario),
-      modo: 'MANUAL',
-      experiencia
-    });
+  if (req.method === 'POST' && url.pathname === '/api/registros/eliminar') {
+    const body = await leerJson(req);
+    const documento = String(body.documento || '').trim();
+    const fila = Number(body.fila || 0);
+    const filaValida = Number.isInteger(fila) && fila >= 2;
+    const motivo = String(body.motivo || '').trim();
+    if (!documentoValido(documento)) {
+      responderJson(req, res, 400, { ok: false, error: 'Documento no válido.' });
+      return;
+    }
+    const activo = [...jobs.values()].find((j) =>
+      j.documento === documento && ['en_cola', 'procesando'].includes(j.estado)
+    );
+    if (activo) {
+      responderJson(req, res, 409, {
+        ok: false,
+        error: 'Este paciente está en cola o procesándose. Espere a que termine antes de enviarlo a Eliminados.'
+      });
+      return;
+    }
+    try {
+      const base = await cargarBase();
+      const resultado = filaValida
+        ? await base.marcarEliminadoFila(fila, usuario.usuario, motivo)
+        : await base.marcarEliminado(documento, usuario.usuario, motivo);
+      await usuariosStore.registrarAuditoria(usuario.usuario, 'ENVIAR_A_ELIMINADOS', documento, motivo || 'Sin motivo especificado').catch(() => {});
+      responderJson(req, res, 200, { ok: true, ...resultado });
+    } catch (error) {
+      responderJson(req, res, 400, { ok: false, error: error.message });
+    }
     return;
   }
 
@@ -536,7 +996,7 @@ async function manejar(req, res) {
 
   if (req.method === 'POST' && url.pathname === '/api/biofile/enviar') {
     const body = await leerJson(req);
-    const documento = String(body.documento || '').trim().replace(/\s+/g, '');
+    const documento = documentoClave(body.documento);
     const fila = Number(body.fila || 0);
     const filaValida = Number.isInteger(fila) && fila >= 2;
 
@@ -546,7 +1006,46 @@ async function manejar(req, res) {
     }
 
     const subirImagenes = body.subirImagenes !== false;
-    const { job, duplicado } = encolar({ documento, fila, subirImagenes, usuario });
+    const empresaCatalogo = String(body.empresa || '').trim();
+    const tipoEvaluacion = normalizarTipoEvaluacion(body.tipoEvaluacion || TIPOS_EVALUACION_BIOFILE[0]);
+    let paquete = String(body.paquete || 'NO APLICA').trim() || 'NO APLICA';
+
+    if (!tipoEvaluacion) {
+      responderJson(req, res, 400, { ok: false, error: 'El tipo de evaluación seleccionado no es válido.' });
+      return;
+    }
+
+    if (normalizarUsuario(paquete) !== normalizarUsuario('NO APLICA')) {
+      if (!empresaCatalogo) {
+        responderJson(req, res, 400, { ok: false, error: 'Para usar un paquete debes indicar la empresa/acuerdo comercial.' });
+        return;
+      }
+      const validacionPaquete = await catalogoStore.validarPaquete(empresaCatalogo, tipoEvaluacion, paquete);
+      if (!validacionPaquete.ok) {
+        responderJson(req, res, 409, { ok: false, error: validacionPaquete.error });
+        return;
+      }
+      paquete = validacionPaquete.paquete;
+    } else {
+      paquete = 'NO APLICA';
+    }
+
+    const { job, duplicado } = await encolar({
+      documento,
+      fila,
+      subirImagenes,
+      empresaCatalogo,
+      tipoEvaluacion,
+      paquete,
+      usuario
+    });
+
+    await usuariosStore.registrarAuditoria(
+      usuario.usuario,
+      duplicado ? 'ENVIO_DUPLICADO_BLOQUEADO' : 'SOLICITAR_INGRESO_AUTOMATICO',
+      documento,
+      'Job: ' + job.id + (duplicado ? ' | Ya estaba activo con: ' + job.usuarioNombre : '')
+    ).catch(() => {});
 
     responderJson(req, res, duplicado ? 409 : 202, {
       ok: !duplicado,
@@ -554,12 +1053,13 @@ async function manejar(req, res) {
       mensaje: duplicado
         ? `Ese documento ya está en cola o procesándose con ${job.usuarioNombre}.`
         : `Solicitud recibida en la cola de ${usuario.usuario}.`,
-      job: jobPublico(job),
+      job: job.usuarioId === usuario.id || usuario.rol === 'superadmin' ? jobPublico(job) : null,
       statusPath: `/api/biofile/trabajos/${job.id}`
     });
     return;
   }
 
+  if (url.pathname.startsWith('/api/biofile/trabajos/')) await requireJobs();
   const matchJob = url.pathname.match(/^\/api\/biofile\/trabajos\/([0-9a-f-]+)$/i);
   if (req.method === 'GET' && matchJob) {
     const job = jobs.get(matchJob[1]);
@@ -586,6 +1086,23 @@ validarConfiguracion({
   requiereEscrituraGoogle: true
 });
 
+catalogoStore.inicializar().catch((error) => {
+  console.error('[CATALOGO] No fue posible preparar las hojas del catálogo:', error.message);
+});
+
+directorioEmpresasStore.inicializar().then(() => {
+  setTimeout(() => {
+    programarSincronizacionEmpresas({ force: false }).catch((error) => console.error('[CLIENTES] Sincronización automática:', error.message));
+  }, 15_000).unref?.();
+}).catch((error) => {
+  console.error('[CLIENTES] No fue posible preparar el directorio interno:', error.message);
+});
+
+const timerDirectorioEmpresas = setInterval(() => {
+  programarSincronizacionEmpresas({ force: false }).catch((error) => console.error('[CLIENTES] Revisión periódica:', error.message));
+}, 60 * 60 * 1000);
+timerDirectorioEmpresas.unref?.();
+
 if (usuariosStore.disponible()) {
   usuariosStore.inicializar().catch((error) => {
     console.error('[USUARIOS] No fue posible preparar las hojas de usuarios/auditoría:', error.message);
@@ -605,6 +1122,9 @@ servidor = http.createServer((req, res) => {
   });
 });
 
+void purgeDiagnostics(config.paths.screenshots);
+setInterval(() => { void purgeDiagnostics(config.paths.screenshots); }, 3600000).unref();
+
 servidor.listen(config.api.port, '0.0.0.0', () => {
   console.log(`[API] BIOFILE Robot API multiusuario escuchando en 0.0.0.0:${config.api.port}`);
   console.log(`[API] Usuarios configurados en Render: ${config.usuariosEntorno.length}`);
@@ -616,7 +1136,9 @@ servidor.listen(config.api.port, '0.0.0.0', () => {
 
 function apagar(senal) {
   console.log(`[API] ${senal} recibido. Cerrando servidor...`);
-  servidor.close(() => process.exit(0));
+  jobService.accepting = false;
+  servidor.close();
+  jobService.shutdown().then(() => cerrarNavegador()).finally(() => process.exit(0));
   setTimeout(() => process.exit(1), 290_000).unref();
 }
 

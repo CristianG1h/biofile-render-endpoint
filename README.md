@@ -1,3 +1,5 @@
+> Actualización Nacionales: consulte [guía y tabla de verificación](docs/NACIONALES.md). El arranque/build utiliza fuentes consolidadas y ya no ejecuta los patches históricos.
+
 # BIOFILE Robot API para Render
 
 Backend de **VIP Salud Ocupacional** para automatizar el ingreso de pacientes a BIOFILE a partir de Google Sheets. Está desarrollado en **Node.js + Playwright**, se ejecuta en Render y trabaja junto con el repositorio `panel-gestion-biofile-vip`.

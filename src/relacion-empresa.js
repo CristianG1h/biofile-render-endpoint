@@ -288,6 +288,53 @@ export function resolverRelacionEnIndice(indice, {
         };
       }
     }
+    /* RELACION_PLACEHOLDER_V73 */
+    // Algunos registros antiguos conservan PARTICULARES en el campo Acuerdo
+    // aunque Empresa en misión sí trae la empresa real. Ese valor es un
+    // placeholder histórico y no debe invalidar una misión exacta del catálogo.
+    const esPlaceholder = (valor) => ['PARTICULARES', 'PARTICULAR'].includes(claveEmpresa(valor));
+    const acuerdoPlaceholder = esPlaceholder(acuerdoTexto);
+    const misionPlaceholder = esPlaceholder(misionTexto);
+
+    if (acuerdoPlaceholder && !misionPlaceholder) {
+      const porMision = resolverMisionExacta(indice, misionTexto);
+      if (porMision && !porMision.ambiguo && porMision.acuerdo && porMision.empresaMision) {
+        return {
+          ...porMision,
+          fuente: 'mision-recuperada-acuerdo-particulares'
+        };
+      }
+    }
+
+    if (misionPlaceholder && !acuerdoPlaceholder) {
+      const porAcuerdo = resolverAcuerdoExacto(indice, acuerdoTexto);
+      if (porAcuerdo && !porAcuerdo.ambiguo && porAcuerdo.acuerdo && porAcuerdo.empresaMision) {
+        return {
+          ...porAcuerdo,
+          fuente: 'acuerdo-recuperado-mision-particulares'
+        };
+      }
+    }
+
+    // Si ninguno era placeholder, solo se recupera cuando resolver cada campo
+    // por separado conduce exactamente a la misma pareja. Así no se adivina.
+    if (!acuerdoPlaceholder && !misionPlaceholder) {
+      const porMision = resolverMisionExacta(indice, misionTexto);
+      const porAcuerdo = resolverAcuerdoExacto(indice, acuerdoTexto);
+      if (
+        porMision && !porMision.ambiguo && porMision.acuerdo && porMision.empresaMision &&
+        porAcuerdo && !porAcuerdo.ambiguo && porAcuerdo.acuerdo && porAcuerdo.empresaMision &&
+        claveEmpresa(porMision.acuerdo) === claveEmpresa(porAcuerdo.acuerdo) &&
+        claveEmpresa(porMision.empresaMision) === claveEmpresa(porAcuerdo.empresaMision)
+      ) {
+        return {
+          acuerdo: porMision.acuerdo,
+          empresaMision: porMision.empresaMision,
+          fuente: 'par-explicito-reconciliado'
+        };
+      }
+    }
+
     return { ambiguo: true, fuente: 'par-explicito-invalido' };
   }
 

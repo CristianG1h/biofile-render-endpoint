@@ -123,19 +123,22 @@ function valorPorPalabras(headers, fila, palabras, excluidas = []) {
  * tengan Localidad, Municipio residencia, EPS, AFP o ARL. También acepta
  * la localidad guardada en la columna Zona para conservar el receptor antiguo.
  */
-export async function obtenerDatosRegistroAdicionales({ google, row, logger }) {
+export async function obtenerDatosRegistroAdicionales({ google, row, logger, base }) {
   const fila = Number(row || 0);
   if (!Number.isInteger(fila) || fila < 2) return {};
 
   try {
-    const spreadsheetId = extraerSpreadsheetId(google.urlOId);
-    const token = await obtenerTokenGoogle(google);
-    const hoja = escaparHoja(google.hoja);
-
-    const [headers, valores] = await Promise.all([
-      leerRango({ spreadsheetId, range: `${hoja}!A1:ZZ1`, token }),
-      leerRango({ spreadsheetId, range: `${hoja}!A${fila}:ZZ${fila}`, token })
-    ]);
+    let headers, valores;
+    if (base) ({ headers, valores } = base.datosFila(fila));
+    else {
+      const spreadsheetId = extraerSpreadsheetId(google.urlOId);
+      const token = await obtenerTokenGoogle(google);
+      const hoja = escaparHoja(google.hoja);
+      [headers, valores] = await Promise.all([
+        leerRango({ spreadsheetId, range: `${hoja}!A1:ZZ1`, token }),
+        leerRango({ spreadsheetId, range: `${hoja}!A${fila}:ZZ${fila}`, token })
+      ]);
+    }
 
     const localidadExplicita = valorPorEncabezado(headers, valores, [
       'Localidad',

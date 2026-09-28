@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { configParaUsuario } from './config.js';
-import { crearSesion } from './browser.js';
 
 const HEADERS_EMPRESAS = [
   'CLAVE_EMPRESA',
@@ -43,6 +42,29 @@ export function normalizarClaveEmpresa(valor) {
 
 function texto(valor) {
   return String(valor ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/* DIRECTORIO_EMPRESAS_CALIDAD_V74C */
+export function normalizarFechaDirectorio(valor) {
+  const numero = typeof valor === 'number'
+    ? valor
+    : (/^\d{5}(?:[.,]\d+)?$/.test(String(valor ?? '').trim()) ? Number(String(valor).replace(',', '.')) : NaN);
+  if (Number.isFinite(numero) && numero >= 20000 && numero <= 100000) {
+    const fecha = new Date(Date.UTC(1899, 11, 30) + Math.round(numero) * 86400000);
+    const dd = String(fecha.getUTCDate()).padStart(2, '0');
+    const mm = String(fecha.getUTCMonth() + 1).padStart(2, '0');
+    return dd + '/' + mm + '/' + fecha.getUTCFullYear();
+  }
+  return texto(valor);
+}
+
+export function acuerdoDirectorioValido(valor) {
+  const original = texto(valor);
+  if (!original || original.length < 2) return false;
+  if (/^\d+(?:[.,]\d+)?$/.test(original)) return false;
+  const normal = normalizarClaveEmpresa(original);
+  if (/^TOTAL(?: GENERAL)?(?:\s|$)/.test(normal)) return false;
+  return true;
 }
 
 function ahoraIso() {
@@ -113,7 +135,7 @@ class SheetsClient {
     const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer', assertion })
+      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.access_token) {
@@ -162,8 +184,15 @@ class SheetsClient {
 
   async escribir(id, range, values) {
     return this.request(
-      `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
       { method: 'PUT', body: JSON.stringify({ range, majorDimension: 'ROWS', values }) }
+    );
+  }
+
+  async limpiar(id, range) {
+    return this.request(
+      `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}:clear`,
+      { method: 'POST', body: '{}' }
     );
   }
 }
@@ -215,12 +244,12 @@ export class DirectorioEmpresasBiofileStore {
       acuerdo: texto(r[1]),
       cliente: texto(r[2]),
       identificacion: texto(r[3]),
-      fechaCreacion: texto(r[4]),
+      fechaCreacion: normalizarFechaDirectorio(r[4]),
       primeraDeteccionIso: texto(r[5]),
       ultimaDeteccionIso: texto(r[6]),
       fuente: texto(r[7]),
       activo: activoDesdeValor(r[8])
-    })).filter((x) => x.clave && x.acuerdo);
+    })).filter((x) => x.clave && x.acuerdo && acuerdoDirectorioValido(x.acuerdo));
     this.cache = { cargadoEn: Date.now(), items };
     return items;
   }
@@ -235,18 +264,23 @@ export class DirectorioEmpresasBiofileStore {
     const rows = await this.client.leer(this.spreadsheetId, `${escaparHoja(this.hojaSync)}!A2:I2`);
     const r = rows[0] || [];
     const items = await this.listar();
-    const nuevas = [...items]
-      .sort((a, b) => String(b.primeraDeteccionIso).localeCompare(String(a.primeraDeteccionIso)))
-      .slice(0, 12)
-      .map((x) => ({ acuerdo: x.acuerdo, cliente: x.cliente, primeraDeteccionIso: x.primeraDeteccionIso }));
+    const ultimoExito = texto(r[1]);
+    const nuevasUltima = Number(r[4] || 0);
+    const nuevas = nuevasUltima > 0
+      ? [...items]
+          .filter((x) => texto(x.primeraDeteccionIso) === ultimoExito)
+          .sort((a, b) => a.acuerdo.localeCompare(b.acuerdo, 'es', { sensitivity: 'base' }))
+          .slice(0, Math.min(12, nuevasUltima))
+          .map((x) => ({ acuerdo: x.acuerdo, cliente: x.cliente, primeraDeteccionIso: x.primeraDeteccionIso }))
+      : [];
     return {
       ultimoIntentoIso: texto(r[0]),
-      ultimoExitoIso: texto(r[1]),
+      ultimoExitoIso: ultimoExito,
       estado: texto(r[2]) || 'PENDIENTE',
-      totalEmpresas: Number(r[3] || items.length || 0),
-      nuevasUltima: Number(r[4] || 0),
-      fechaDesde: texto(r[5]),
-      fechaHasta: texto(r[6]),
+      totalEmpresas: items.length,
+      nuevasUltima,
+      fechaDesde: normalizarFechaDirectorio(r[5]),
+      fechaHasta: normalizarFechaDirectorio(r[6]),
       duracionMs: Number(r[7] || 0),
       error: texto(r[8]),
       recientes: nuevas
@@ -288,20 +322,21 @@ export class DirectorioEmpresasBiofileStore {
       .map(({ x }) => ({ acuerdo: x.acuerdo, cliente: x.cliente }));
   }
 
-  async guardarSincronizacion(clientes, { fechaDesde, fechaHasta, duracionMs = 0 } = {}) {
+  async guardarSincronizacion(clientes, { fechaDesde, fechaHasta, duracionMs = 0, reemplazar = false } = {}) {
     const tarea = async () => {
       await this.inicializar();
       const existentes = await this.#leerEmpresasForzado();
-      const mapa = new Map(existentes.map((x) => [x.clave, { ...x }]));
+      const mapaPrevio = new Map(existentes.map((x) => [x.clave, { ...x }]));
+      const mapa = reemplazar ? new Map() : new Map(mapaPrevio);
       const detectadasIso = ahoraIso();
       let nuevas = 0;
 
       for (const raw of clientes || []) {
         const acuerdo = texto(raw.acuerdo || raw.nombreAcuerdo || raw.cliente);
         const clave = normalizarClaveEmpresa(acuerdo);
-        if (!clave || acuerdo.length < 2) continue;
-        const previa = mapa.get(clave);
-        if (!previa) nuevas += 1;
+        if (!clave || acuerdo.length < 2 || !acuerdoDirectorioValido(acuerdo)) continue;
+        const previa = mapa.get(clave) || mapaPrevio.get(clave);
+        if (!mapaPrevio.has(clave) && !mapa.has(clave)) nuevas += 1;
         mapa.set(clave, {
           clave,
           acuerdo,
@@ -321,6 +356,15 @@ export class DirectorioEmpresasBiofileStore {
         x.primeraDeteccionIso, x.ultimaDeteccionIso, x.fuente || 'BIOFILE_CLIENTES', x.activo !== false ? 'TRUE' : 'FALSE'
       ])];
       await this.client.escribir(this.spreadsheetId, `${escaparHoja(this.hojaEmpresas)}!A1:I${values.length}`, values);
+
+      /* DIRECTORIO_ESTABLE_SIN_MISION_V78_DIRECTORIO */
+      const ultimaFilaNueva = items.length + 1; // encabezado + empresas únicas
+      const ultimaFilaAnterior = existentes.length + 1;
+      if (ultimaFilaAnterior > ultimaFilaNueva) {
+        const desde = ultimaFilaNueva + 1;
+        const rangoSobrante = `${escaparHoja(this.hojaEmpresas)}!A${desde}:I${ultimaFilaAnterior}`;
+        await this.client.limpiar(this.spreadsheetId, rangoSobrante);
+      }
 
       const meta = [
         ahoraIso(), detectadasIso, 'OK', items.length, nuevas,
@@ -420,25 +464,46 @@ async function llenarFechas(page, desde, hasta) {
 }
 
 async function pulsarBuscar(page) {
-  const candidatos = [
-    page.getByRole('button', { name: /buscar/i }),
-    page.locator('button:has-text("Buscar")'),
-    page.locator('input[type="submit"][value*="Buscar" i]'),
-    page.locator('[title*="Buscar" i]'),
-    page.locator('a:has-text("Buscar")')
-  ];
-  for (const loc of candidatos) {
-    if (await visible(loc)) {
-      await loc.first().click();
+  const contextos = page.frames();
+  for (const ctx of contextos) {
+    const exactos = [
+      ctx.locator('td.BHEnabledBuscar[onclick*="BuscarDatosParaExcel"][onclick*="Lista-de-Clientes"]'),
+      ctx.locator('td[onclick*="BuscarDatosParaExcel"][onclick*="Lista-de-Clientes"]'),
+      ctx.locator('td.BHEnabledBuscar[onclick*="BuscarDatosParaExcel"]'),
+      ctx.locator('[onclick*="BuscarDatosParaExcel"]')
+    ];
+    for (const loc of exactos) {
+      if (await visible(loc)) {
+        await loc.first().click();
+        return;
+      }
+    }
+  }
+
+  for (const ctx of contextos) {
+    const candidatos = [
+      ctx.getByRole('button', { name: /buscar/i }),
+      ctx.locator('button:has-text("Buscar")'),
+      ctx.locator('input[type="submit"][value*="Buscar" i]'),
+      ctx.locator('[title*="Buscar" i]'),
+      ctx.locator('a:has-text("Buscar")')
+    ];
+    for (const loc of candidatos) {
+      if (await visible(loc)) {
+        await loc.first().click();
+        return;
+      }
+    }
+
+    const img = ctx.locator('img[src*="Buscar.png" i], img[alt*="Buscar" i], img[title*="Buscar" i]').first();
+    if (await visible(img)) {
+      const padre = img.locator('xpath=..');
+      if (await visible(padre)) await padre.click();
+      else await img.click();
       return;
     }
   }
-  const img = page.locator('img[alt*="Buscar" i], img[title*="Buscar" i]').first();
-  if (await visible(img)) {
-    await img.click();
-    return;
-  }
-  throw new Error('No se encontró el botón Buscar en Clientes de BIOFILE.');
+  throw new Error('No se encontró el control Buscar de Clientes de BIOFILE.');
 }
 
 function normalizarHeader(valor) {
@@ -470,7 +535,8 @@ export function filasTablaAClientes(rows) {
   for (const cells of rows.slice(headerIndex + 1)) {
     if (!Array.isArray(cells) || !cells.length) continue;
     const acuerdo = texto(cells[indices.acuerdo]);
-    if (!acuerdo || normalizarClaveEmpresa(acuerdo).includes('TOTAL')) continue;
+    if (!acuerdoDirectorioValido(acuerdo)) continue;
+    if (!acuerdo || /^TOTAL(?: GENERAL)?(?:\s|$)/.test(normalizarClaveEmpresa(acuerdo))) continue;
     out.push({
       acuerdo,
       identificacion: indices.identificacion >= 0 ? texto(cells[indices.identificacion]) : '',
@@ -488,8 +554,11 @@ async function extraerTablasFrame(frame) {
   for (let i = 0; i < n; i += 1) {
     const tabla = tablas.nth(i);
     if (!await tabla.isVisible().catch(() => false)) continue;
-    const rows = await tabla.locator('tr').evaluateAll((trs) => trs.map((tr) =>
-      Array.from(tr.querySelectorAll('th,td')).map((td) => (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim())
+    // table.rows + tr.cells devuelve únicamente las celdas de esta tabla.
+    // querySelectorAll('th,td') también incluía celdas de tablas anidadas de BIOFILE,
+    // desplazando columnas y creando falsos acuerdos como 13 / Cliente 15.
+    const rows = await tabla.evaluate((table) => Array.from(table.rows || []).map((tr) =>
+      Array.from(tr.cells || []).map((td) => (td.innerText || td.textContent || '').replace(/\s+/g, ' ').trim())
     )).catch(() => []);
     const clientes = filasTablaAClientes(rows);
     if (clientes.length) encontrados.push(...clientes);
@@ -576,6 +645,7 @@ export async function sincronizarEmpresasDesdeBiofile({ usuario, store, completo
   };
   let sesion;
   try {
+    const { crearSesion } = await import('./browser.js');
     sesion = await crearSesion(cfg, logger);
     await sesion.asegurarLogin();
     const { page } = sesion;
@@ -593,10 +663,20 @@ export async function sincronizarEmpresasDesdeBiofile({ usuario, store, completo
     if (!clientes.length) {
       throw new Error(`BIOFILE no devolvió empresas entre ${rango.desde} y ${rango.hasta}. Se canceló la actualización para no reemplazar el directorio con un resultado vacío.`);
     }
+    if (rango.completo) {
+      const existentes = await store.listar().catch(() => []);
+      const minimoSeguro = existentes.length >= 100
+        ? Math.max(50, Math.floor(existentes.length * 0.45))
+        : 1;
+      if (clientes.length < minimoSeguro) {
+        throw new Error('La lectura histórica devolvió solo ' + clientes.length + ' empresas frente a ' + existentes.length + ' guardadas. Se conservó el directorio anterior por seguridad.');
+      }
+    }
     const resultado = await store.guardarSincronizacion(clientes, {
       fechaDesde: rango.desde,
       fechaHasta: rango.hasta,
-      duracionMs: Date.now() - inicio
+      duracionMs: Date.now() - inicio,
+      reemplazar: rango.completo
     });
     return {
       ok: true,

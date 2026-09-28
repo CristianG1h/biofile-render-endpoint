@@ -172,18 +172,5 @@ export async function aplicarDatosRegistroBiofile({ page, config, registro, defa
     });
   }
 
-  const campos = [
-    ['eps', 'Eps', registro.eps || defaults.eps || 'NO REFIERE'],
-    ['afp', 'Afp', registro.afp || defaults.afp || 'NO REFIERE'],
-    ['arl', 'Arl', registro.arl || defaults.arl || 'NO REFIERE']
-  ];
-
-  for (const [fieldKey, etiqueta, valor] of campos) {
-    const control = await controlCercaDeEtiqueta(page, config, fieldKey, etiqueta);
-    const resultado = await escribirTextoSinSugerencias(page, control, valor, etiqueta);
-    logger?.info('Afiliación escrita literalmente en Biofile.', {
-      campo: etiqueta.toUpperCase(),
-      valor: resultado
-    });
-  }
+  // Afiliaciones ya seleccionadas y verificadas por BiofileClient.
 }

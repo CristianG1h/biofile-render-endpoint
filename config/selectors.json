@@ -42,5 +42,12 @@
   "cerrarExito": "",
   "subirFoto": "",
   "subirFirma": "",
-  "nuevo": ""
+  "nuevo": "",
+  "orderSearchInput": "",
+  "orderSearchButton": "",
+  "products": {
+    "table": "#TbProducto",
+    "entry": "#trProducto",
+    "add": "#BtnGuardar"
+  }
 }

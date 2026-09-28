@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+runtime/
+logs/
+screenshots/
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.zip
+*.xlsx
+auth/
