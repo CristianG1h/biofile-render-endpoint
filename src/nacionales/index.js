@@ -80,7 +80,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
     try {
       const route = url.pathname.slice('/api/nacionales/'.length);
       if (route === 'config' && req.method === 'GET') {
-        send(req,res,200,{ ok:true, ...configuration(), catalog, automaticCityMap, tiposEvaluacion: ['INGRESO','PERIÓDICO','EGRESO','POST INCAPACIDAD'], canConfigure: actor.rol === 'superadmin', canResumeProducts: Boolean(config.selectors.orderSearchInput && config.selectors.orderSearchButton && config.selectors.numeroOrden) }); return true;
+        send(req,res,200,{ ok:true, ...configuration(), catalog, automaticCityMap, tiposEvaluacion: ['INGRESO','PERIÓDICO','EGRESO','POST INCAPACIDAD'], canConfigure: actor.rol === 'superadmin', canResumeProducts: true }); return true;
       }
       if (route === 'config/companies/source' && req.method === 'GET') {
         send(req,res,200,{ ok:true, companies: await companies() }); return true;
@@ -165,7 +165,6 @@ export function createNationalApi({ service, ready, send, companies, screenshots
           if (later.at(-1)?.id !== job.id) throw new Error('Existe un intento posterior. Consulte el último trabajo para continuar sin duplicar operaciones.');
           const resume = job.estado==='parcial' && job.numeroOrden;
           if(job.usuarioId!==actor.id || (!resume && (!job.reintentable || job.guardadoIntentado))) throw new Error('Este trabajo requiere conciliación de la orden existente. No se autoriza crear otra.');
-          if(resume && !(config.selectors.orderSearchInput && config.selectors.orderSearchButton && config.selectors.numeroOrden)) throw new Error('La reapertura automática requiere configurar los selectores de búsqueda de la orden. Conserve esta orden y revise los productos pendientes.');
           const prepared=prepare(job.concept);if(prepared.errors.length) throw new Error(prepared.errors.join('. '));
           const result=await service.enqueue({kind:'national-job',conceptId:job.conceptId,fileHash:job.fileHash,sourceFile:job.sourceFile,documento:job.documento,concept:job.concept,products:resume?job.products:prepared.products,company:resume?job.company:prepared.company,numeroOrden:resume?job.numeroOrden:'',guardadoIntentado:Boolean(resume),guardadoConfirmado:Boolean(resume),productosAgregados:resume?job.productosAgregados:[]},actor,processNational);
           send(req,res,result.duplicado?409:202,{ok:!result.duplicado,job:publicJob(result.job)});return true;
