@@ -36,47 +36,47 @@ export function canonicalProductCity(city) {
   return CITY_ALIASES.get(n) || [...Object.keys(automaticCityMap.cities || {})].find(x => norm(x) === n) || String(city || '').trim().toUpperCase();
 }
 
-export function automaticProductMapping(city, exam) {
+export function automaticProductMappings(city, exam) {
   const canonicalCity=canonicalProductCity(city);
   const canonical=canonicalExam(exam);
-  const id=automaticCityMap.cities?.[canonicalCity]?.[canonical];
-  if (!id) return null;
-  const product=catalog.find(p => p.id === String(id) && p.active);
-  if (!product) return null;
+  const configured=automaticCityMap.cities?.[canonicalCity]?.[canonical];
+  const ids=Array.isArray(configured)?configured:(configured?[configured]:[]);
   const defaults=automaticCityMap.defaults || {};
-  return {
-    city: canonicalCity,
-    exam: canonical,
-    productId: product.id,
-    biofileProduct: product.name,
-    prestador: defaults.prestador || 'No Aplica',
-    formaPago: defaults.formaPago || 'CONTADO',
-    cantidad: Number(defaults.cantidad) || 1,
-    valor: defaults.valor == null ? null : Number(defaults.valor),
-    activo: true,
-    automatico: true
-  };
+  return ids.map(id=>catalog.find(p=>p.id===String(id)&&p.active)).filter(Boolean).map(product=>({
+    city:canonicalCity,
+    exam:canonical,
+    productId:product.id,
+    biofileProduct:product.name,
+    cantidad:Number(defaults.cantidad)||1,
+    activo:true,
+    automatico:true
+  }));
+}
+
+export function automaticProductMapping(city, exam) {
+  return automaticProductMappings(city, exam)[0] || null;
 }
 
 export function validateProductMapping(value) {
   const product = catalog.find(p => p.id === String(value.productId) && p.active);
   if (!product) throw new Error('Producto no encontrado en el catálogo importado.');
-  if (!value.city || !value.exam || !value.prestador || !value.formaPago) throw new Error('Complete ciudad, examen, prestador y forma de pago.');
+  if (!value.city || !value.exam) throw new Error('Complete ciudad y examen.');
   if (!Number.isInteger(Number(value.cantidad)) || Number(value.cantidad) < 1 || Number(value.cantidad) > 20) throw new Error('Cantidad no válida.');
   if (value.valor !== '' && value.valor != null && (!Number.isFinite(Number(value.valor)) || Number(value.valor) < 0)) throw new Error('Valor no válido.');
-  return { city: String(value.city).slice(0,100), exam: String(value.exam).slice(0,120), productId: product.id, biofileProduct: product.name, prestador: String(value.prestador).slice(0,150), formaPago: String(value.formaPago).slice(0,60), cantidad: Number(value.cantidad), valor: value.valor === '' || value.valor == null ? null : Number(value.valor), activo: value.activo === true };
+  return { city: String(value.city).slice(0,100), exam: String(value.exam).slice(0,120), productId: product.id, biofileProduct: product.name, cantidad: Number(value.cantidad), activo: value.activo === true };
 }
 
 export function mapProducts(concept, mappings) {
   const products = [], errors = [];
+  if (!canonicalProductCity(concept.cityExam)) return { products, errors };
   for (const rawExam of [...new Set(concept.exams || [])]) {
     const exam=canonicalExam(rawExam);
     const explicit = mappings.find(m => m.activo && mappingKey(m.city, m.exam) === mappingKey(concept.cityExam, exam));
-    const mapping = explicit ? validateProductMapping(explicit) : automaticProductMapping(concept.cityExam, exam);
-    if (!mapping) {
-      errors.push(`No se encontró un producto BIOFILE para “${exam}” en ${concept.cityExam || 'la ciudad seleccionada'}. Revise Ajustes avanzados.`);
+    const resolved = explicit ? [validateProductMapping(explicit)] : automaticProductMappings(concept.cityExam, exam);
+    if (!resolved.length) {
+      errors.push(`No se encontró un producto BIOFILE para “${exam}” en ${concept.cityExam}. Revise Ajustes avanzados.`);
     } else {
-      products.push(mapping);
+      products.push(...resolved);
     }
   }
   if (new Set(products.map(p => p.productId)).size !== products.length) errors.push('Dos exámenes apuntan al mismo producto. Revise el mapeo.');
