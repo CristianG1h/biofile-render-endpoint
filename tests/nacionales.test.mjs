@@ -49,3 +49,13 @@ test('stored worker-table filename supports compound given names',()=>{
   assert.equal(c.patient.primerApellido,'DIAZ');
   assert.equal(c.patient.segundoApellido,'ROCHA');
 });
+
+test('source workflow creates the order before checking product controls',async()=>{
+  const fs=await import('node:fs/promises');
+  const source=await fs.readFile(new URL('../src/nacionales/processing-service.js',import.meta.url),'utf8');
+  const fill=source.indexOf('client.llenarOrden');
+  const save=source.indexOf('client.guardarYCerrarExito()',fill);
+  const order=source.indexOf("etapa: 'Orden creada'",save);
+  const products=source.indexOf('products.available({ timeoutMs: 20000 })',order);
+  assert(fill>=0&&save>fill&&order>save&&products>order,'Nacionales debe crear la O.S. antes de validar/agregar productos');
+});
