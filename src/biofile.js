@@ -1,3 +1,4 @@
+import { reopenOrder } from './biofile-order-search.js';
 import { activity, checkCancelled } from './jobs/execution.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1389,29 +1390,11 @@ await llenarPaciente(
   }
 
   async abrirOrdenExistente(numeroOrden, documentoEsperado) {
-    await this.abrirOrdenNueva();
-    const { orderSearchInput, orderSearchButton } = this.config.selectors;
-    const input = orderSearchInput
-      ? this.page.locator(orderSearchInput).first()
-      : await this.#controlCercaDeEtiqueta('numeroOrden', 'N°. O.S.');
-    await input.waitFor({ state:'visible', timeout:10000 });
-    await input.click({ clickCount:3 }).catch(()=>{});
-    await input.fill(String(numeroOrden));
-
-    let button;
-    if (orderSearchButton) button=this.page.locator(orderSearchButton).first();
-    else button=await this.#accion('buscar','Buscar');
-    await button.click();
-
-    const until=Date.now()+15000;
-    while(Date.now()<until){
-      const actual=String(await this.obtenerNumeroOrden()).trim();
-      if(actual===String(numeroOrden)) break;
-      await this.page.waitForTimeout(250);
-    }
-    if (String(await this.obtenerNumeroOrden()) !== String(numeroOrden)) throw new Error('BIOFILE no permitió reabrir la O.S. '+numeroOrden+'. No se creará otra orden.');
-    const field = await this.#controlCercaDeEtiqueta('numeroDocumento', 'N°. de Identificación');
-    if (String(await field.inputValue()).replace(/[^a-z0-9]/gi,'') !== String(documentoEsperado).replace(/[^a-z0-9]/gi,'')) throw new Error('La orden recuperada pertenece a otro documento.');
+    await this.page.goto(this.config.biofile.ordenUrl, {waitUntil:'domcontentloaded'});
+    await reopenOrder(this.page, this.config.selectors, numeroOrden, documentoEsperado, async()=>{
+      const field=await this.#controlCercaDeEtiqueta('numeroDocumento', 'N°. de Identificación');
+      return {order:await this.obtenerNumeroOrden(),documentId:await field.inputValue()};
+    });
   }
 
   async seleccionarProductoExacto(locator, value) { return this.#seleccionarAutocompletado(locator, value, 'Nombre del Producto o Servicio'); }

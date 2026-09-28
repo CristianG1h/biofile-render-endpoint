@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BiofileProducts } from '../src/biofile-products.js';
+import { reopenOrder } from '../src/biofile-order-search.js';
 import { crearSesion, cerrarNavegador } from '../src/browser.js';
 const browser=await chromium.launch({headless:true});
 try {
@@ -30,6 +31,12 @@ try {
   const pereira={...product,biofileProduct:'ANEXO OSTEOMUSCULAR //PEREIRA'};
   await page.evaluate(()=>{window.AgregarProducto=()=>{const row=document.createElement('tr');row.innerHTML='<td>1</td><td>ANEXO OSTEOMUSCULAR // PEREIRA</td><td>Seleccione</td><td>100</td><td>CONTADO</td>';document.querySelector('#TbProducto').append(row);return false;};});
   await products.add(pereira);assert.equal((await products.find(pereira)).length,1);
+  await page.setContent(`<button id="B_BH_BtnBuscar" onclick="document.querySelector('#search').hidden=false">Buscar</button><div id="search" hidden><input id="BuscaNoOrdenServicio"><table><tr><td onclick="window.filtered=document.querySelector('#BuscaNoOrdenServicio').value"><img id="C_BtnAceptaBuscar" alt="Buscar"></td></tr></table><table><tr onclick="window.selected=true;document.querySelector('#search').hidden=true"><td><img src="/Imagenes/Seleccionar.png" alt="Seleccionar"></td><td>43285</td><td>123456789</td><td>PRUEBA</td></tr></table></div>`);
+  await reopenOrder(page,{},'43285','123456789',async()=>({order:'43285',documentId:'123456789'}),500);
+  assert.equal(await page.evaluate(()=>window.filtered),'43285');assert.equal(await page.evaluate(()=>window.selected),true);
+  await page.evaluate(()=>window.selected=false);
+  await assert.rejects(reopenOrder(page,{},'43285','999999999',async()=>({order:'43285',documentId:'123456789'}),200),/única fila/);
+  assert.equal(await page.evaluate(()=>window.selected),false);
   if(process.env.PANEL_DIR){
     const root=path.resolve(process.env.PANEL_DIR);
     const concepts=['pending','done','partial','deleted'].map(id=>({id,sourceFile:id+'.pdf',estado:'LISTO',patient:{numeroDocumento:'123456',primerNombre:'PRUEBA',primerApellido:'SINTETICA'},employment:{},exams:[],warnings:[],autoFilledFields:[],cityExam:'PEREIRA',...(id==='deleted'?{deletedAt:'2026-01-01'}:{})}));

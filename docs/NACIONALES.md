@@ -8,7 +8,7 @@ El módulo usa el login, los tres roles y la cola BIOFILE existentes. No crea pa
 2. Configure alias de empresa, acuerdo y empresa en misión con nombres exactos. El formulario consulta el directorio existente como referencia. Los alias se guardan como configuración, sin sustituir ese directorio.
 3. Configure cada pareja ciudad/examen con uno de los **1008 productos** importados de Productos-y-Servicios.xlsx. Defina prestador, forma de pago y cantidad. El valor puede quedar vacío para conservar el valor BIOFILE; el precio del Excel es referencia y no una regla de cobro automática.
 4. No se cargan mapeos inventados: el Excel no especifica prestadores ni equivalencias completas ciudad/examen. Un producto o empresa sin configurar bloquea el envío.
-5. La reanudación de productos sobre una orden parcial necesita verificar en BIOFILE y completar `orderSearchInput`, `orderSearchButton` y `numeroOrden` en `config/selectors.json` (o el archivo privado definido por SELECTORS_PATH). Permanecen vacíos porque no hay evidencia del DOM de búsqueda. La creación normal obtiene el número por la etiqueta existente `N°. O.S.`.
+5. La reanudación usa los controles verificados: `#B_BH_BtnBuscar` abre la ventana, `#BuscaNoOrdenServicio` filtra la O.S. y `#C_BtnAceptaBuscar` ejecuta la búsqueda. Selecciona la fila mediante `Seleccionar.png` únicamente si coinciden O.S. y documento, y vuelve a validar ambos en el formulario cargado.
 
 ## Flujo
 

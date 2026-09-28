@@ -43,11 +43,12 @@
   "subirFoto": "",
   "subirFirma": "",
   "nuevo": "",
-  "orderSearchInput": "",
-  "orderSearchButton": "",
+  "orderSearchInput": "#BuscaNoOrdenServicio",
+  "orderSearchButton": "#C_BtnAceptaBuscar",
   "products": {
     "table": "#TbProducto",
     "entry": "#trProducto",
     "add": "#BtnGuardar"
-  }
+  },
+  "orderSearchOpen": "#B_BH_BtnBuscar"
 }
