@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { createNationalApi, duplicateBarrier } from '../src/nacionales/index.js';
 function harness() {
   const items=new Map(),jobs=new Map();let executed=0,response;
-  const service={store:{items,save:async r=>items.set(r.id,structuredClone(r))},jobs,enqueue:async()=>{executed++;return{job:{id:'x'}};}};
+  const service={store:{items,save:async r=>items.set(r.id,structuredClone(r)),delete:async id=>{items.delete(id);return true;}},jobs,enqueue:async()=>{executed++;return{job:{id:'x'}};}};
   const handler=createNationalApi({service,ready:Promise.resolve(),send:(_q,_s,status,body)=>{response={status,body};},companies:async()=>[],screenshotsRoot:'/private'});
   return {items,jobs,get executed(){return executed;},async request(route,method,actor,body={}){const req=Readable.from([Buffer.from(JSON.stringify(body))]);req.method=method;req.headers={};await handler(req,{},new URL('http://local/api/nacionales/'+route),actor);return response;}};
 }
@@ -26,3 +26,6 @@ test('all roles access Nacionales but histories remain owner-scoped',async()=>{
   const h=harness();h.items.set('a',{id:'a',kind:'national-concept',usuarioId:'a'});h.items.set('b',{id:'b',kind:'national-concept',usuarioId:'b'});
   for(const rol of ['user','admin','superadmin']){const r=await h.request('history','GET',{id:'a',rol});assert.equal(r.status,200);assert.deepEqual(r.body.concepts.map(c=>c.id),['a']);}
 });
+
+test('owner can delete an uploaded concept when it is not active',async()=>{const h=harness(),id='22222222-2222-2222-2222-222222222222';h.items.set(id,{id,kind:'national-concept',usuarioId:'a'});const r=await h.request('concepts/'+id,'DELETE',{id:'a',rol:'user'});assert.equal(r.status,200);assert.equal(h.items.has(id),false);});
+test('concept deletion is blocked while its BIOFILE job is active',async()=>{const h=harness(),id='33333333-3333-3333-3333-333333333333';h.items.set(id,{id,kind:'national-concept',usuarioId:'a'});h.jobs.set('j',{id:'j',kind:'national-job',conceptId:id,usuarioId:'a',estado:'procesando'});const r=await h.request('concepts/'+id,'DELETE',{id:'a',rol:'user'});assert.equal(r.status,409);assert.equal(h.items.has(id),true);});
