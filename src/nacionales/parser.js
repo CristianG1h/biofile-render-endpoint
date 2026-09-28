@@ -77,6 +77,35 @@ function splitWorkerName(value) {
   }
   return splitNames(value,true);
 }
+
+function identityLooksCorrupt(patient={}) {
+  const fields=['primerNombre','segundoNombre','primerApellido','segundoApellido'];
+  const values=fields.map(k=>clean(patient[k])).filter(Boolean);
+  if (!clean(patient.primerNombre) || !clean(patient.primerApellido)) return true;
+  return values.some(v => /^\d+$/.test(v) || /\bAÑOS?\b/i.test(v) || /^(MESES?|D[IÍ]AS?)$/i.test(v));
+}
+
+export function repairStoredConcept(concept) {
+  const c=structuredClone(concept || {});
+  const p=c.patient ||= {};
+  if (c.templateDetected!=='worker-table' || !identityLooksCorrupt(p) || !c.sourceFile) return c;
+  let base=String(c.sourceFile)
+    .replace(/\.[^.]+$/,'')
+    .replace(/[ _-]+CONCEPTO(?:[ _-]+M[EÉ]DICO)?(?:[ _-].*)?$/i,'')
+    .replace(/[ _-]+CERTIFICADO(?:[ _-].*)?$/i,'')
+    .trim();
+  if (!/^[\p{L} .'-]+$/u.test(base) || base.split(/\s+/).length < 3) return c;
+  const repaired=splitWorkerName(base);
+  if (!repaired.primerNombre || !repaired.primerApellido || identityLooksCorrupt(repaired)) return c;
+  for (const k of ['primerNombre','segundoNombre','primerApellido','segundoApellido']) p[k]=clean(repaired[k]);
+  c.autoFilledFields=(c.autoFilledFields||[]).filter(f=>!['primerNombre','segundoNombre','primerApellido','segundoApellido'].includes(f.campo));
+  for (const k of ['primerNombre','segundoNombre','primerApellido','segundoApellido']) {
+    if (p[k]) c.autoFilledFields.push({campo:k,valor:p[k],motivo:'Identidad recuperada del nombre del archivo porque una extracción anterior mezcló la edad con los nombres. Confirme antes de enviar.'});
+  }
+  c.warnings=[...(c.warnings||[]).filter(w=>!/identidad recuperada/i.test(w)),'Identidad recuperada del nombre del archivo. Confirme nombres y apellidos antes de enviar.'];
+  c.reviewed=false;
+  return c;
+}
 function setName(patient,value,surnameFirst=false,worker=false) {
   const parsed=worker?splitWorkerName(value):splitNames(value,surnameFirst);
   for(const k of ['primerNombre','segundoNombre','primerApellido','segundoApellido']) if(parsed[k]!==undefined) patient[k]=clean(parsed[k]);
