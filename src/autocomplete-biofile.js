@@ -4,6 +4,17 @@ export function textoBusquedaAutocomplete(etiqueta, valor) {
   const original = String(valor || '').trim();
   const campo = normalizar(etiqueta);
   const buscado = normalizar(original);
+  if (campo === 'NOMBRE DEL PRODUCTO O SERVICIO') {
+    // BIOFILE despliega mejor el autocompletado al escribir primero el nombre base
+    // y luego seleccionar la coincidencia exacta (incluida la ciudad // ...).
+    const base = original.split('//')[0].trim().replace(/\s+/g, ' ');
+    const n = normalizar(base);
+    if (n.includes('EXAMEN MEDICO OCUPACIONAL')) return 'EXAMEN MEDICO OCUPACIONAL';
+    if (n.includes('AUDIOMETR')) return 'AUDIOMETRIA';
+    if (n.includes('VISIOMETR')) return 'VISIOMETRIA';
+    if (n.includes('OPTOMETR')) return 'OPTOMETRIA';
+    return base || original;
+  }
   if (campo !== 'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO') return original;
   if (buscado.includes('POST INCAPACIDAD')) return 'POST';
   if (buscado.includes('PERIODIC')) return 'PERIOD';
