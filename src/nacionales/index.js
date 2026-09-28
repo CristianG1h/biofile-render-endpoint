@@ -120,6 +120,15 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         return true;
       }
       const conceptMatch = /^concepts\/([0-9a-f-]+)$/.exec(route);
+      if (conceptMatch && req.method === 'DELETE') {
+        const source = store.items.get(conceptMatch[1]);
+        if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        const active = [...service.jobs.values()].find(j => j.kind === 'national-job' && j.conceptId === source.id && ['en_cola','procesando'].includes(j.estado));
+        if (active) throw Object.assign(new Error('No se puede eliminar mientras el concepto está en cola o enviándose a BIOFILE.'),{statusCode:409});
+        await store.delete(source.id);
+        send(req,res,200,{ok:true,id:source.id});
+        return true;
+      }
       if (conceptMatch && req.method === 'PATCH') {
         const source = store.items.get(conceptMatch[1]);
         if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
