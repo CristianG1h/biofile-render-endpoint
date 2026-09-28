@@ -22,16 +22,46 @@ async function slot() {
   else openContexts++;
   return () => { const next = slots.shift(); if (next) next(); else openContexts--; };
 }
+
+export async function waitForAccountTurn(previous, { signal = execution.getStore()?.signal, timeoutMs = Number(process.env.BIOFILE_SESSION_WAIT_MS || 45000) } = {}) {
+  if (!previous) return;
+  signal?.throwIfAborted();
+  let timer, abortHandler;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('La sesión BIOFILE está ocupada por otra operación. Reintente en unos segundos.'), { code:'BIOFILE_SESSION_BUSY' })), Math.max(1000, timeoutMs));
+    timer.unref?.();
+  });
+  const aborted = signal ? new Promise((_, reject) => {
+    abortHandler = () => reject(signal.reason instanceof Error ? signal.reason : new Error('Operación cancelada.'));
+    signal.addEventListener('abort', abortHandler, { once:true });
+  }) : new Promise(()=>{});
+  try { await Promise.race([previous.catch(() => {}), timeout, aborted]); }
+  finally {
+    clearTimeout(timer);
+    if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+  }
+}
 export async function cerrarNavegador() { if (browserPromise) await (await browserPromise).close(); browserPromise = null; }
 export async function crearSesion(config, logger) {
   checkCancelled();
   const account = config.biofile.usuario.trim().toUpperCase();
+  const hadPrevious = accountTails.has(account);
   const previous = accountTails.get(account) || Promise.resolve();
   let unlock;
   const pending = new Promise(r => { unlock = r; });
   const tail = previous.catch(() => {}).then(() => pending);
   accountTails.set(account, tail);
-  await previous.catch(() => {});
+  if (hadPrevious) {
+    await activity('Esperando que termine otra operación en esta sesión BIOFILE.', { etapa:'Esperando sesión BIOFILE', persist:true });
+    try {
+      await waitForAccountTurn(previous);
+      await activity('Turno BIOFILE disponible. Abriendo navegador.', { persist:true });
+    } catch (error) {
+      unlock();
+      if (accountTails.get(account) === tail) accountTails.delete(account);
+      throw error;
+    }
+  }
   let releaseSlot;
   let context, closed = false;
   const version = crypto.createHash('sha256').update(account + ':' + config.biofile.contrasena).digest('hex');
