@@ -80,7 +80,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
     try {
       const route = url.pathname.slice('/api/nacionales/'.length);
       if (route === 'config' && req.method === 'GET') {
-        send(req,res,200,{ ok:true, ...configuration(), catalog, tiposEvaluacion: ['INGRESO','PERIÓDICO','EGRESO','POST INCAPACIDAD'], canConfigure: actor.rol === 'superadmin', canResumeProducts: Boolean(config.selectors.orderSearchInput && config.selectors.orderSearchButton && config.selectors.numeroOrden) }); return true;
+        send(req,res,200,{ ok:true, ...configuration(), catalog, automaticCityMap, tiposEvaluacion: ['INGRESO','PERIÓDICO','EGRESO','POST INCAPACIDAD'], canConfigure: actor.rol === 'superadmin', canResumeProducts: Boolean(config.selectors.orderSearchInput && config.selectors.orderSearchButton && config.selectors.numeroOrden) }); return true;
       }
       if (route === 'config/companies/source' && req.method === 'GET') {
         send(req,res,200,{ ok:true, companies: await companies() }); return true;

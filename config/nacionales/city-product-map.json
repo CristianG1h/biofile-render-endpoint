@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "description": "Productos canónicos para las ciudades presentes en conceptos Nacionales. Un mapeo manual de Super Admin siempre tiene prioridad.",
+  "defaults": {
+    "prestador": "No Aplica",
+    "formaPago": "CONTADO",
+    "cantidad": 1,
+    "valor": null
+  },
+  "cities": {
+    "BOGOTÁ": {
+      "AUDIOMETRÍA": "4",
+      "VISIOMETRÍA": "7",
+      "OPTOMETRÍA": "6",
+      "EXAMEN MÉDICO OCUPACIONAL": "1"
+    },
+    "MEDELLÍN": {
+      "AUDIOMETRÍA": "708",
+      "VISIOMETRÍA": "180",
+      "OPTOMETRÍA": "261",
+      "EXAMEN MÉDICO OCUPACIONAL": "699"
+    },
+    "BARRANQUILLA": {
+      "AUDIOMETRÍA": "175",
+      "VISIOMETRÍA": "295",
+      "OPTOMETRÍA": "224",
+      "EXAMEN MÉDICO OCUPACIONAL": "251"
+    },
+    "CALI": {
+      "AUDIOMETRÍA": "207",
+      "VISIOMETRÍA": "163",
+      "OPTOMETRÍA": "184",
+      "EXAMEN MÉDICO OCUPACIONAL": "2"
+    },
+    "PEREIRA": {
+      "AUDIOMETRÍA": "409",
+      "VISIOMETRÍA": "410",
+      "OPTOMETRÍA": "658",
+      "EXAMEN MÉDICO OCUPACIONAL": "1"
+    },
+    "CARTAGENA": {
+      "AUDIOMETRÍA": "201",
+      "VISIOMETRÍA": "161",
+      "OPTOMETRÍA": "248",
+      "EXAMEN MÉDICO OCUPACIONAL": "166"
+    },
+    "VILLAVICENCIO": {
+      "AUDIOMETRÍA": "205",
+      "VISIOMETRÍA": "199",
+      "OPTOMETRÍA": "228",
+      "EXAMEN MÉDICO OCUPACIONAL": "256"
+    },
+    "VALLEDUPAR": {
+      "AUDIOMETRÍA": "549",
+      "VISIOMETRÍA": "548",
+      "OPTOMETRÍA": "774",
+      "EXAMEN MÉDICO OCUPACIONAL": "547"
+    },
+    "MONTERÍA": {
+      "AUDIOMETRÍA": "170",
+      "VISIOMETRÍA": "705",
+      "OPTOMETRÍA": "466",
+      "EXAMEN MÉDICO OCUPACIONAL": "365"
+    },
+    "TUNJA": {
+      "AUDIOMETRÍA": "676",
+      "VISIOMETRÍA": "723",
+      "OPTOMETRÍA": "432",
+      "EXAMEN MÉDICO OCUPACIONAL": "431"
+    },
+    "SANTA MARTA": {
+      "AUDIOMETRÍA": "455",
+      "VISIOMETRÍA": "712",
+      "OPTOMETRÍA": "454",
+      "EXAMEN MÉDICO OCUPACIONAL": "384"
+    },
+    "MANIZALES": {
+      "AUDIOMETRÍA": "363",
+      "VISIOMETRÍA": "364",
+      "OPTOMETRÍA": "393",
+      "EXAMEN MÉDICO OCUPACIONAL": "361"
+    },
+    "CÚCUTA": {
+      "AUDIOMETRÍA": "492",
+      "VISIOMETRÍA": "886",
+      "OPTOMETRÍA": "490",
+      "EXAMEN MÉDICO OCUPACIONAL": "453"
+    },
+    "CARTAGO": {
+      "AUDIOMETRÍA": "923",
+      "VISIOMETRÍA": "921",
+      "OPTOMETRÍA": "469",
+      "EXAMEN MÉDICO OCUPACIONAL": "470"
+    },
+    "BUCARAMANGA": {
+      "AUDIOMETRÍA": "267",
+      "VISIOMETRÍA": "702",
+      "OPTOMETRÍA": "269",
+      "EXAMEN MÉDICO OCUPACIONAL": "270"
+    }
+  }
+}
