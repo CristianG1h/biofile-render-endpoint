@@ -46,7 +46,7 @@ export async function processNational({ usuario, job, onProgress, signal }) {
       const product = job.products[i];
       const existing = await products.find(product);
       if (existing.length) {
-        if (!products.matches(existing, product)) throw new Error('El producto existente no coincide en cantidad, prestador o forma de pago. Requiere conciliación.');
+        if (!products.matches(existing, product)) throw new Error('El producto existente no coincide con el nombre o la cantidad esperados. Requiere conciliación.');
         added.push({ productId:product.productId,nombre:product.biofileProduct,cantidad:product.cantidad,confirmadoEn:new Date().toISOString(),reconciliado:true });
       } else {
         if (previouslyConfirmed.some(p=>p.productId===product.productId)) throw new Error('Un producto confirmado no aparece en la tabla. Verifique la orden antes de agregarlo otra vez.');
@@ -54,9 +54,8 @@ export async function processNational({ usuario, job, onProgress, signal }) {
       }
       await onProgress({ productosAgregados: [...added], persist: true, event: 'PRODUCT_ADD_COMPLETED', ultimoPasoEjecutado: `Producto ${i + 1} confirmado` });
     }
-    await onProgress({ porcentaje: 98, etapa: 'Confirmando guardado final' });
-    await client.guardarYCerrarExito();
-    for (const p of job.products) if (!products.matches(await products.find(p),p)) throw new Error('No se confirmó la persistencia del producto después del guardado final.');
+    await onProgress({ porcentaje: 98, etapa: 'Verificando productos guardados', detalle:'Cada producto se guarda con el botón de la fila de productos; no se modifican Prestador, valores ni Forma de Pago.' });
+    for (const p of job.products) if (!products.matches(await products.find(p),p)) throw new Error('BIOFILE no confirmó uno de los productos en la O.S. '+numeroOrden+'. No se creará otra orden.');
     return { numeroOrden, productosAgregados: added, imagenesEnviadas: false };
   } catch (error) {
     if (session && !signal.aborted) {
