@@ -21,9 +21,33 @@ export function sanitizeEdit(body, source) {
   for (const group of ['patient','employment']) for (const key of Object.keys(c[group] || {})) if (typeof body[group]?.[key] === 'string') c[group][key] = body[group][key].trim().slice(0,200);
   if (typeof body.cityExam === 'string') c.cityExam = body.cityExam.trim().slice(0,100);
   if (Array.isArray(body.exams) && body.exams.length <= 20) c.exams = [...new Set(body.exams.map(e => String(e).trim().slice(0,120)).filter(Boolean))];
-  c.companyId = String(body.companyId || '').slice(0,100); c.reviewed = body.reviewed === true;
+  if (typeof body.companyId === 'string') c.companyId = body.companyId.trim().slice(0,100);
+  if (typeof body.companyAgreement === 'string') c.companyAgreement = body.companyAgreement.trim().slice(0,180);
+  c.reviewed = body.reviewed === true;
   return c;
 }
+
+export function directoryCompanyMatch(items, value) {
+  const key = norm(value);
+  if (!key) return null;
+  return (items || []).find(item => norm(item?.acuerdo) === key || norm(item?.cliente) === key) || null;
+}
+
+export function companyForConcept(concept, configuredCompanies = []) {
+  const agreement = String(concept?.companyAgreement || '').trim();
+  if (agreement) {
+    return {
+      id: 'directory:' + norm(agreement),
+      alias: agreement,
+      acuerdoBiofile: agreement,
+      empresaMisionBiofile: agreement,
+      activo: true,
+      source: 'directorio'
+    };
+  }
+  return configuredCompanies.find(c => c.id === concept?.companyId && c.activo) || null;
+}
+
 async function readBody(req, max = 65536) {
   if (Number(req.headers['content-length'] || 0) > max) throw Object.assign(new Error('Archivo demasiado grande.'), { statusCode: 413 });
   const chunks = []; let size = 0;
@@ -38,10 +62,17 @@ export function createNationalApi({ service, ready, send, companies, screenshots
   const publicJob = j => { const { captura, concept, ...safe } = j; return { ...safe, hasScreenshot: Boolean(captura), patient: concept?.patient, autoFilledFields: concept?.autoFilledFields }; };
   const prepare = concept => {
     const conf = configuration(), errors = validateConcept(concept);
-    const company = conf.companies.find(c => c.id === concept.companyId && c.activo);
-    if (!company) errors.push('Seleccione una empresa configurada por Super Admin.');
-    const mapped = mapProducts(concept, conf.products); errors.push(...mapped.errors);
+    const company = companyForConcept(concept, conf.companies);
+    if (!company) errors.push('Seleccione la empresa / acuerdo BIOFILE antes de enviar.');
+    const mapped = mapProducts(concept, conf.products);
+    errors.push(...mapped.errors);
     return { errors, company, products: mapped.products };
+  };
+  const refreshConcept = concept => {
+    const upgraded = applyDefaults(concept);
+    upgraded.validationErrors = prepare(upgraded).errors;
+    upgraded.estado = upgraded.validationErrors.length ? 'REQUIERE_REVISION' : 'LISTO';
+    return upgraded;
   };
   return async function handle(req, res, url, actor) {
     if (!url.pathname.startsWith('/api/nacionales/')) return false;
@@ -74,9 +105,14 @@ export function createNationalApi({ service, ready, send, companies, screenshots
           const bytes = Buffer.from(body.data,'base64'), metadata = validateFile(String(body.name || ''),String(body.mime || ''),bytes);
           const duplicates = records('national-concept').filter(c => c.fileHash === metadata.fileHash);
           const existing = duplicates.find(c => c.usuarioId === actor.id);
-          if (existing) { send(req,res,200,{ ok:true,concept:existing,duplicate:true,duplicateWarning:'Este archivo ya fue analizado. Se recuperó la vista previa existente.' }); return true; }
+          if (existing) {
+            const upgraded = refreshConcept(existing);
+            if (JSON.stringify(upgraded) !== JSON.stringify(existing)) await store.save(upgraded);
+            send(req,res,200,{ ok:true,concept:upgraded,duplicate:true,duplicateWarning:'Este archivo ya fue analizado. Se recuperó la vista previa existente con las reglas actuales de Nacionales.' });
+            return true;
+          }
           const extracted = await extractFile(bytes, metadata, text => { const p=parseDocument(text).patient; return !p.numeroDocumento || !p.primerNombre; });
-          const c = { ...applyDefaults(parseDocument(extracted.text)), ...metadata, extractionMethod:extracted.method, id:crypto.randomUUID(),kind:'national-concept',usuarioId:actor.id,usuarioNombre:actor.usuario,creadoEn:new Date().toISOString(),reviewed:false };
+          const c = { ...applyDefaults(parseDocument(extracted.text)), ...metadata, extractionMethod:extracted.method, id:crypto.randomUUID(),kind:'national-concept',usuarioId:actor.id,usuarioNombre:actor.usuario,creadoEn:new Date().toISOString(),reviewed:false,companyAgreement:'' };
           c.estado='REQUIERE_REVISION'; c.validationErrors=prepare(c).errors;
           if (duplicates.length) c.warnings.push('Este documento fue cargado anteriormente por otro usuario.');
           await store.save(c); send(req,res,200,{ ok:true,concept:c });
@@ -87,7 +123,18 @@ export function createNationalApi({ service, ready, send, companies, screenshots
       if (conceptMatch && req.method === 'PATCH') {
         const source = store.items.get(conceptMatch[1]);
         if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
-        const body=await readBody(req), c=sanitizeEdit(body,source); c.validationErrors=prepare(c).errors;c.estado=c.validationErrors.length?'REQUIERE_REVISION':'LISTO';
+        const body=await readBody(req), c=sanitizeEdit(body,source);
+        if (typeof body.companyAgreement === 'string') {
+          c.companyId = '';
+          const requested = String(c.companyAgreement || '').trim();
+          if (requested) {
+            const match = directoryCompanyMatch(await companies(), requested);
+            if (!match?.acuerdo) throw Object.assign(new Error('Seleccione una empresa válida de la lista de BIOFILE; no escriba un nombre libre.'), { statusCode:400 });
+            c.companyAgreement = String(match.acuerdo).trim().slice(0,180);
+          }
+        }
+        c.validationErrors=prepare(c).errors;
+        c.estado=c.validationErrors.length?'REQUIERE_REVISION':'LISTO';
         await store.save(c);send(req,res,200,{ok:true,concept:c});return true;
       }
       if (route === 'process' && req.method === 'POST') {
@@ -123,7 +170,14 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         if(!match[2] && req.method==='GET') {send(req,res,200,{ok:true,job:publicJob(job)});return true;}
       }
       if(route==='history' && req.method==='GET') {
-        send(req,res,200,{ok:true,concepts:records('national-concept').filter(c=>c.usuarioId===actor.id).slice(-200),jobs:[...service.jobs.values()].filter(j=>j.kind==='national-job' && canRead(actor,j)).slice(-200).map(publicJob)});return true;
+        const own = records('national-concept').filter(c=>c.usuarioId===actor.id).slice(-200);
+        const concepts = [];
+        for (const original of own) {
+          const upgraded = refreshConcept(original);
+          if (JSON.stringify(upgraded) !== JSON.stringify(original)) await store.save(upgraded);
+          concepts.push(upgraded);
+        }
+        send(req,res,200,{ok:true,concepts,jobs:[...service.jobs.values()].filter(j=>j.kind==='national-job' && canRead(actor,j)).slice(-200).map(publicJob)});return true;
       }
       throw Object.assign(new Error('Ruta Nacionales no encontrada.'),{statusCode:404});
     } catch(error) {send(req,res,error.statusCode || 400,{ok:false,error:String(error.message).slice(0,1500)});return true;}

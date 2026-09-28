@@ -14,7 +14,7 @@ export function mapProducts(concept, mappings) {
   const products = [], errors = [];
   for (const exam of [...new Set(concept.exams || [])]) {
     const mapping = mappings.find(m => m.activo && mappingKey(m.city, m.exam) === mappingKey(concept.cityExam, exam));
-    if (!mapping) errors.push(`PRODUCTO SIN MAPEAR: ${exam} / ${concept.cityExam}`);
+    if (!mapping) errors.push(`El examen “${exam}” todavía no está relacionado con un producto de BIOFILE para ${concept.cityExam || 'esta ciudad'}. Solicite al administrador que configure ese examen antes de enviarlo.`);
     else products.push(validateProductMapping(mapping));
   }
   if (new Set(products.map(p => p.productId)).size !== products.length) errors.push('Dos exámenes apuntan al mismo producto. Revise el mapeo.');
