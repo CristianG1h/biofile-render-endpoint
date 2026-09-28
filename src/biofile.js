@@ -1370,9 +1370,9 @@ await llenarPaciente(
     }
 
     await this.#llenar('paquete', 'Nombre del Paquete', defaults.paquete, { autocomplete: true });
-    await this.#llenar('eps', 'Eps', r.eps || defaults.eps, { autocomplete: true });
-    await this.#llenar('afp', 'Afp', r.afp || defaults.afp, { autocomplete: true });
-    await this.#llenar('arl', 'Arl', r.arl || defaults.arl, { autocomplete: true });
+    await this.#llenar('eps', 'Eps', r.eps || defaults.eps);
+    await this.#llenar('afp', 'Afp', r.afp || defaults.afp);
+    await this.#llenar('arl', 'Arl', r.arl || defaults.arl);
     await this.#llenar('diagnostico', 'Diagnóstico CIE-10', defaults.diagnostico);
     await this.#llenar('tipoVinculacion', 'Tipo de vinculación', defaults.tipoVinculacion);
     await this.#llenar('tipoAfiliado', 'Tipo Afiliado', defaults.tipoAfiliado);
@@ -1386,14 +1386,27 @@ await llenarPaciente(
   }
 
   async abrirOrdenExistente(numeroOrden, documentoEsperado) {
+    await this.abrirOrdenNueva();
     const { orderSearchInput, orderSearchButton } = this.config.selectors;
-    if (!orderSearchInput || !orderSearchButton) throw new Error('Configure orderSearchInput y orderSearchButton con los selectores verificados de búsqueda de órdenes. No se creará otra orden.');
-    await this.page.locator(orderSearchInput).fill(String(numeroOrden));
-    await this.page.locator(orderSearchButton).click();
-    await this.page.waitForFunction(({ selector, expected }) => {
-      const el = document.querySelector(selector); return el && String(el.value).trim() === expected;
-    }, { selector: this.config.selectors.numeroOrden, expected: String(numeroOrden) }, { timeout:15000 });
-    if (String(await this.obtenerNumeroOrden()) !== String(numeroOrden)) throw new Error('La orden recuperada no coincide.');
+    const input = orderSearchInput
+      ? this.page.locator(orderSearchInput).first()
+      : await this.#controlCercaDeEtiqueta('numeroOrden', 'N°. O.S.');
+    await input.waitFor({ state:'visible', timeout:10000 });
+    await input.click({ clickCount:3 }).catch(()=>{});
+    await input.fill(String(numeroOrden));
+
+    let button;
+    if (orderSearchButton) button=this.page.locator(orderSearchButton).first();
+    else button=await this.#accion('buscar','Buscar');
+    await button.click();
+
+    const until=Date.now()+15000;
+    while(Date.now()<until){
+      const actual=String(await this.obtenerNumeroOrden()).trim();
+      if(actual===String(numeroOrden)) break;
+      await this.page.waitForTimeout(250);
+    }
+    if (String(await this.obtenerNumeroOrden()) !== String(numeroOrden)) throw new Error('BIOFILE no permitió reabrir la O.S. '+numeroOrden+'. No se creará otra orden.');
     const field = await this.#controlCercaDeEtiqueta('numeroDocumento', 'N°. de Identificación');
     if (String(await field.inputValue()).replace(/[^a-z0-9]/gi,'') !== String(documentoEsperado).replace(/[^a-z0-9]/gi,'')) throw new Error('La orden recuperada pertenece a otro documento.');
   }
