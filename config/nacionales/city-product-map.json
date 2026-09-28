@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Productos canónicos para las ciudades presentes en conceptos Nacionales. Un mapeo manual de Super Admin siempre tiene prioridad.",
+  "version": 2,
+  "description": "Productos BIOFILE exactos organizados para las 16 ciudades detectadas en el flujo Nacionales. Los nombres se toman del catálogo importado; los mapeos manuales de Super Admin tienen prioridad.",
   "defaults": {
     "prestador": "No Aplica",
     "formaPago": "CONTADO",
@@ -97,6 +97,11 @@
       "VISIOMETRÍA": "702",
       "OPTOMETRÍA": "269",
       "EXAMEN MÉDICO OCUPACIONAL": "270"
+    },
+    "SOPÓ": {
+      "AUDIOMETRÍA": "998",
+      "VISIOMETRÍA": "997",
+      "EXAMEN MÉDICO OCUPACIONAL": "995"
     }
   }
 }
