@@ -106,7 +106,8 @@ export async function crearSesion(config, logger) {
         if (await estaEnLogin()) throw new Error('BIOFILE rechazó el inicio de sesión.');
       }
       if (!/OrdenesServiciosSaludOcupacional/i.test(page.url())) await page.goto(config.biofile.ordenUrl, { waitUntil: 'domcontentloaded' });
-      await page.locator(config.selectors.guardar || '#B_BH_BtnGuardar').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('body').waitFor({ state:'visible', timeout:15000 });
+      if (await estaEnLogin()) throw new Error('BIOFILE devolvió nuevamente la pantalla de inicio de sesión.');
       states.set(account, { version, at: Date.now(), value: await context.storageState() });
     }
     const session = { context, page, browser: { close: release }, asegurarLogin,
