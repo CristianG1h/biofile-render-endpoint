@@ -69,6 +69,21 @@ function parseAge(value) {
   const m=n.match(/(\d{1,3})\s*ANOS?(?:\s+(\d{1,2})\s*MESES?)?(?:\s+(\d{1,2})\s*DIAS?)?/);
   return m ? {years:Number(m[1]),months:Number(m[2]||0),days:Number(m[3]||0)} : null;
 }
+
+const SUPPORTED_EXAM_CITIES = [
+  ['BARRANQUILLA','BARRANQUILLA'],['BUCARAMANGA','BUCARAMANGA'],['VILLAVICENCIO','VILLAVICENCIO'],
+  ['SANTA MARTA','SANTA MARTA'],['VALLEDUPAR','VALLEDUPAR'],['CARTAGENA','CARTAGENA'],
+  ['MANIZALES','MANIZALES'],['MEDELLIN','MEDELLÍN'],['MONTERIA','MONTERÍA'],['CUCUTA','CÚCUTA'],
+  ['BOGOTA','BOGOTÁ'],['PEREIRA','PEREIRA'],['CARTAGO','CARTAGO'],['CALI','CALI'],['TUNJA','TUNJA'],['SOPO','SOPÓ']
+];
+function inferSupportedExamCity(text) {
+  const n=norm(text);
+  const found=[];
+  for(const [key,label] of SUPPORTED_EXAM_CITIES) {
+    if(new RegExp('(?:^|\\s)'+key.replace(/ /g,'\\s+')+'(?:\\s|$)').test(n) && !found.includes(label)) found.push(label);
+  }
+  return found.length===1 ? found[0] : '';
+}
 const GIVEN_NAMES=new Set(['JUAN','JOSE','LUIS','CARLOS','DANIEL','ALEJANDRO','SANTIAGO','CAMILO','JHON','JHONNATAN','JONATHAN','HEVER','NICOLAS','MARIA','ANA','LAURA','DANIELA','CAMILA','ANDREA','PAOLA','VALENTINA','JULIANA','CAROLINA','ALEJANDRA','GABRIELA','SEBASTIAN','ANDRES','FELIPE','DAVID','MIGUEL','OMAR','ALEXIS','STIVEN','KEVIN']);
 function splitWorkerName(value) {
   const parts=clean(value).split(' ').filter(Boolean);
@@ -239,6 +254,7 @@ export function parseDocument(text) {
 
   const employment={cargo:clean(f.cargo),eps:clean(f.eps),afp:clean(f.afp),arl:clean(f.arl),tipoEvaluacion:evaluation(f.examType||head.slice(0,2500))};
   let cityExam=canonicalCity(f.cityExam);if(!cityExam&&['clinical-certificate','patient-admission','aptitude-sections'].includes(templateDetected))cityExam=canonicalCity(patient.municipioResidencia);
+  if(!cityExam) cityExam=inferSupportedExamCity(head);
   if(!cityExam)warnings.push('Confirme la ciudad donde se realizó el examen.');
   for(const [k,v] of Object.entries(patient))fieldConfidence[k]={level:!v?'missing':autoFilledFields.some(x=>x.campo===k)?'review':'extracted',reason:!v?'No identificado en el documento':autoFilledFields.some(x=>x.campo===k)?'Valor calculado; confirmar en vista previa':'Valor extraído del concepto'};
   return {templateDetected,confidence:'REQUIERE_REVISION',patient,employment,cityExam,examDate,company:{alias:clean(f.empresa),acuerdoBiofile:'',empresaMisionBiofile:''},exams:examList(text),warnings,fieldConfidence,autoFilledFields};
