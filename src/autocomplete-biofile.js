@@ -1,19 +1,22 @@
 import { normalizar } from './util.js';
 
+export function resolverMunicipioColombia(opciones, solicitado) {
+  const wanted=String(solicitado || '').split('(')[0].trim();
+  const explicit=String(solicitado || '').match(/\(([^,]+),\s*COLOMBIA\)/i)?.[1];
+  const matches=[...new Set(opciones)].filter(option=>{
+    const match=String(option).match(/^\s*(.*?)\s*\(([^,]+),\s*COLOMBIA\)\s*$/i);
+    return match && normalizar(match[1])===normalizar(wanted) && (!explicit || normalizar(match[2])===normalizar(explicit));
+  });
+  return matches.length===1 ? matches[0] : '';
+}
+
 export function textoBusquedaAutocomplete(etiqueta, valor) {
   const original = String(valor || '').trim();
   const campo = normalizar(etiqueta);
   const buscado = normalizar(original);
   if (campo === 'NOMBRE DEL PRODUCTO O SERVICIO') {
-    // BIOFILE despliega mejor el autocompletado al escribir primero el nombre base
-    // y luego seleccionar la coincidencia exacta (incluida la ciudad // ...).
-    const base = original.split('//')[0].trim().replace(/\s+/g, ' ');
-    const n = normalizar(base);
-    if (n.includes('EXAMEN MEDICO OCUPACIONAL')) return 'EXAMEN MEDICO OCUPACIONAL';
-    if (n.includes('AUDIOMETR')) return 'AUDIOMETRIA';
-    if (n.includes('VISIOMETR')) return 'VISIOMETRIA';
-    if (n.includes('OPTOMETR')) return 'OPTOMETRIA';
-    return base || original;
+    // Incluya la ciudad: los menús BIOFILE limitan las sugerencias para búsquedas genéricas.
+    return original;
   }
   if (campo !== 'TIPO DE EVALUACION MEDICA O PROCEDIMIENTO') return original;
   if (buscado.includes('POST INCAPACIDAD')) return 'POST';

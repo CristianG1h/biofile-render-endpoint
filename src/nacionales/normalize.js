@@ -85,8 +85,8 @@ const CITY_ALIASES = Object.freeze([
 
 export function canonicalCity(value) {
   const n = norm(value);
-  if (!n) return '';
-  for (const [key, label] of CITY_ALIASES) if (n.includes(key)) return label;
+  if (!n || ['NO APLICA','NO REFIERE','SIN INFORMACION','SELECCIONE'].includes(n)) return '';
+  for (const [key, label] of CITY_ALIASES) if (n===key || n.startsWith(key+' ') || n.endsWith(' '+key)) return label;
   const raw = clean(value).split('(')[0].split('/').pop().split(/\s+-\s+/)[0].trim();
   return raw ? raw.toUpperCase() : '';
 }

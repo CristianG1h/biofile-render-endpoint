@@ -24,3 +24,11 @@ jobs:
         run: npm ci
       - name: Ejecutar pruebas de seguridad
         run: npm test
+      - name: Instalar motores PDF y OCR
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-spa
+      - name: Verificar extracción digital y OCR
+        run: node scripts/test-file-engines.mjs
+      - name: Instalar Chromium de pruebas
+        run: npx playwright install --with-deps chromium
+      - name: Verificar filas de productos y aislamiento de sesiones
+        run: node scripts/test-browser.mjs

@@ -22,8 +22,18 @@ try {
   const products=new BiofileProducts({page,config:{selectors:{}},seleccionarProductoExacto:async(l,v)=>l.fill(v)});
   const product={productId:'TEST',biofileProduct:'AUDIOMETRÍA',prestador:'No Aplica',formaPago:'CONTADO',cantidad:1,valor:100};
   const result=await products.add(product);assert.equal(result.productId,'TEST');assert.equal((await products.find(product)).length,1);await assert.rejects(products.add(product),/ya aparece/);assert(!products.matches(await products.find(product),{...product,cantidad:2}));
+  // A typed entry is not evidence of a saved row, including after a failed click.
+  await page.locator('#TbProducto tr').last().evaluate(el=>el.remove());
+  await page.evaluate(()=>{window.AgregarProducto=()=>false;});
+  assert.equal((await products.find(product)).length,0);
+  await assert.rejects(products.add(product,{confirmationTimeoutMs:250}),/no confirmó/);
+  const pereira={...product,biofileProduct:'ANEXO OSTEOMUSCULAR //PEREIRA'};
+  await page.evaluate(()=>{window.AgregarProducto=()=>{const row=document.createElement('tr');row.innerHTML='<td>1</td><td>ANEXO OSTEOMUSCULAR // PEREIRA</td><td>Seleccione</td><td>100</td><td>CONTADO</td>';document.querySelector('#TbProducto').append(row);return false;};});
+  await products.add(pereira);assert.equal((await products.find(pereira)).length,1);
   if(process.env.PANEL_DIR){
     const root=path.resolve(process.env.PANEL_DIR);
+    const concepts=['pending','done','partial','deleted'].map(id=>({id,sourceFile:id+'.pdf',estado:'LISTO',patient:{numeroDocumento:'123456',primerNombre:'PRUEBA',primerApellido:'SINTETICA'},employment:{},exams:[],warnings:[],autoFilledFields:[],cityExam:'PEREIRA',...(id==='deleted'?{deletedAt:'2026-01-01'}:{})}));
+    const jobs=[{id:'job-done',conceptId:'done',estado:'completado',numeroOrden:'TEST-1',guardadoIntentado:true,creadoEn:'2026-01-01',progreso:100},{id:'job-partial',conceptId:'partial',estado:'parcial',numeroOrden:'TEST-2',guardadoIntentado:true,creadoEn:'2026-01-01',progreso:91}];
     await page.route('**/*',async route=>{
       const url=new URL(route.request().url());
       if(url.hostname==='panel.test'){
@@ -34,6 +44,7 @@ try {
       if(url.pathname.startsWith('/api/')){
         let data={ok:true,registros:[],jobs:[],concepts:[],companies:[],products:[],catalog:[],usuarios:[]};
         if(url.pathname.endsWith('/config'))data.canConfigure=true;
+        if(url.pathname.endsWith('/history'))data={...data,concepts,jobs};
         return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
       }
       return route.fulfill({body:''});
@@ -42,6 +53,12 @@ try {
     await page.goto('http://panel.test/app-v3.html');
     await page.evaluate(()=>iniciarApp({id:'test',nombre:'USUARIO PRUEBA',rol:'superadmin'}));
     await page.locator('#btnNacionales').click();await page.locator('#nacionalesDialog[open]').waitFor();
+    await page.locator('[data-section="ingresado"]').waitFor();
+    assert.equal(await page.locator('#natRows tr').count(),1);
+    await page.locator('[data-section="ingresado"]').click();assert.equal(await page.locator('#natRows [data-action="process"]').count(),0);
+    await page.locator('[data-section="error"]').click();assert.equal(await page.locator('#natRows tr').count(),1);
+    await page.locator('[data-section="eliminado"]').click();assert.equal(await page.locator('#natRows [data-action="restore"]').count(),1);
+    await page.locator('[data-section="pendiente"]').click();
     await page.locator('#natConfigToggle').click();await page.locator('#natConfig:not([hidden])').waitFor();
     await page.screenshot({path:process.env.TEMP+'/biofile-nacionales-desktop.png'});
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:process.env.TEMP+'/biofile-nacionales-mobile.png'});

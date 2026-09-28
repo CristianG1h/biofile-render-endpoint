@@ -78,11 +78,11 @@ test('source workflow creates the order before checking product controls',async(
   assert(fill>=0&&save>fill&&order>save&&products>order,'Nacionales debe crear la O.S. antes de validar/agregar productos');
 });
 
-test('product autocomplete searches by base name but preserves exact city product for final selection',()=>{
-  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','EXAMEN MEDICO OCUPACIONAL // CARTAGENA'),'EXAMEN MEDICO OCUPACIONAL');
-  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','AUDIOMETRIA // CUCUTA'),'AUDIOMETRIA');
-  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','VISIOMETRIA // MEDELLIN'),'VISIOMETRIA');
-  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','OPTOMETRIA // CALI'),'OPTOMETRIA');
+test('product autocomplete searches the full name and city to avoid truncated suggestion lists',()=>{
+  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','EXAMEN MEDICO OCUPACIONAL // CARTAGENA'),'EXAMEN MEDICO OCUPACIONAL // CARTAGENA');
+  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','AUDIOMETRIA // CUCUTA'),'AUDIOMETRIA // CUCUTA');
+  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','VISIOMETRIA // MEDELLIN'),'VISIOMETRIA // MEDELLIN');
+  assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','OPTOMETRIA // CALI'),'OPTOMETRIA // CALI');
 });
 
 test('generic city inference identifies Pereira without requiring a labelled city field',()=>{

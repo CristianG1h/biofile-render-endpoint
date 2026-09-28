@@ -29,7 +29,6 @@ export async function waitForAccountTurn(previous, { signal = execution.getStore
   let timer, abortHandler;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => reject(Object.assign(new Error('La sesión BIOFILE está ocupada por otra operación. Reintente en unos segundos.'), { code:'BIOFILE_SESSION_BUSY' })), Math.max(1000, timeoutMs));
-    timer.unref?.();
   });
   const aborted = signal ? new Promise((_, reject) => {
     abortHandler = () => reject(signal.reason instanceof Error ? signal.reason : new Error('Operación cancelada.'));

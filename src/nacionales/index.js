@@ -8,7 +8,7 @@ import { applyDefaults } from './defaults.js';
 import { validateConcept } from './validators.js';
 import { catalog, automaticCityMap, mapProducts, mappingKey, validateProductMapping } from './product-mapper.js';
 import { processNational } from './processing-service.js';
-import { norm } from './normalize.js';
+import { norm, canonicalCity } from './normalize.js';
 export const canRead = (actor, item) => actor.id === item.usuarioId || actor.rol === 'superadmin';
 export function duplicateBarrier(previous, actor, confirmed) {
   const uncertain = previous.find(j => j.estado !== 'completado' && (j.guardadoIntentado || j.numeroOrden));
@@ -30,7 +30,7 @@ export function sanitizeEdit(body, source) {
 export function directoryCompanyMatch(items, value) {
   const key = norm(value);
   if (!key) return null;
-  return (items || []).find(item => norm(item?.acuerdo) === key || norm(item?.cliente) === key) || null;
+  return (items || []).filter(item=>item.activo!==false).find(item => norm(item?.acuerdo) === key || norm(item?.cliente) === key) || null;
 }
 
 export function companyForConcept(concept, configuredCompanies = []) {
@@ -105,14 +105,18 @@ export function createNationalApi({ service, ready, send, companies, screenshots
           const bytes = Buffer.from(body.data,'base64'), metadata = validateFile(String(body.name || ''),String(body.mime || ''),bytes);
           const duplicates = records('national-concept').filter(c => c.fileHash === metadata.fileHash);
           const existing = duplicates.find(c => c.usuarioId === actor.id);
-          if (existing) {
+          if (existing && canonicalCity(existing.cityExam)) {
             const upgraded = refreshConcept(existing);
             if (JSON.stringify(upgraded) !== JSON.stringify(existing)) await store.save(upgraded);
             send(req,res,200,{ ok:true,concept:upgraded,duplicate:true,duplicateWarning:'Este archivo ya fue analizado. Se recuperó la vista previa existente con las reglas actuales de Nacionales.' });
             return true;
           }
-          const extracted = await extractFile(bytes, metadata, text => { const p=parseDocument(text).patient; return !p.numeroDocumento || !p.primerNombre; });
-          const c = { ...applyDefaults(parseDocument(extracted.text)), ...metadata, extractionMethod:extracted.method, id:crypto.randomUUID(),kind:'national-concept',usuarioId:actor.id,usuarioNombre:actor.usuario,creadoEn:new Date().toISOString(),reviewed:false,companyAgreement:'' };
+          const extracted = await extractFile(bytes, metadata, text => { const parsed=parseDocument(text),p=parsed.patient; return !p.numeroDocumento || !p.primerNombre || !parsed.cityExam; });
+          const digital=extracted.digitalText ? parseDocument(extracted.digitalText) : null;
+          const parsed=digital?.patient.numeroDocumento && digital?.patient.primerNombre ? digital : parseDocument(extracted.text);
+          if (!parsed.cityExam && extracted.method==='pdf-text+ocr') { const ocr=parseDocument(extracted.text);parsed.cityExam=ocr.cityExam;parsed.warnings.push(...ocr.warnings.filter(w=>/Ciudad identificada/.test(w))); }
+          const c = { ...applyDefaults(parsed), ...metadata, extractionMethod:extracted.method, id:crypto.randomUUID(),kind:'national-concept',usuarioId:actor.id,usuarioNombre:actor.usuario,creadoEn:new Date().toISOString(),reviewed:false,companyAgreement:'' };
+          if(existing){const recoveredCity=c.cityExam;Object.assign(c,existing,{cityExam:recoveredCity,extractionMethod:extracted.method,reviewed:false});for(const key of ['municipioResidencia','ciudadNacimiento'])if(!canonicalCity(c.patient[key]))c.patient[key]=recoveredCity;}
           c.estado='REQUIERE_REVISION'; c.validationErrors=prepare(c).errors;
           if (duplicates.length) c.warnings.push('Este documento fue cargado anteriormente por otro usuario.');
           await store.save(c); send(req,res,200,{ ok:true,concept:c });
@@ -125,13 +129,16 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
         const active = [...service.jobs.values()].find(j => j.kind === 'national-job' && j.conceptId === source.id && ['en_cola','procesando'].includes(j.estado));
         if (active) throw Object.assign(new Error('No se puede eliminar mientras el concepto está en cola o enviándose a BIOFILE.'),{statusCode:409});
-        await store.delete(source.id);
+        await store.save({...source,deletedAt:new Date().toISOString(),deletedBy:actor.id});
         send(req,res,200,{ok:true,id:source.id});
         return true;
       }
+      const restoreMatch=/^concepts\/([0-9a-f-]+)\/restore$/.exec(route);
+      if (restoreMatch && req.method==='POST') { const source=store.items.get(restoreMatch[1]);if(!source || source.kind!=='national-concept' || source.usuarioId!==actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404}); const restored={...source};delete restored.deletedAt;delete restored.deletedBy;await store.save(restored);send(req,res,200,{ok:true,concept:restored});return true; }
       if (conceptMatch && req.method === 'PATCH') {
         const source = store.items.get(conceptMatch[1]);
         if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        if(source.deletedAt)throw new Error('Restaure el concepto antes de editarlo.');
         const body=await readBody(req), c=sanitizeEdit(body,source);
         if (typeof body.companyAgreement === 'string') {
           c.companyId = '';
@@ -149,6 +156,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
       if (route === 'process' && req.method === 'POST') {
         const body=await readBody(req), c=store.items.get(body.id);
         if (!c || c.kind !== 'national-concept' || c.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        if(c.deletedAt)throw new Error('Restaure el concepto antes de enviarlo.');
         const prepared=prepare(c);if(prepared.errors.length) throw new Error(prepared.errors.join('. '));
         const previous=[...service.jobs.values()].filter(j=>j.kind==='national-job' && (j.fileHash===c.fileHash || j.conceptId===c.id));
         const unsafe=duplicateBarrier(previous,actor,body.confirmDuplicate);
@@ -161,6 +169,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         const job=service.jobs.get(match[1]);
         if(!job || job.kind!=='national-job' || !canRead(actor,job)) throw Object.assign(new Error('Trabajo no encontrado.'),{statusCode:404});
         if(match[2]==='retry' && req.method==='POST') {
+          if(store.items.get(job.conceptId)?.deletedAt)throw new Error('Restaure el concepto antes de reintentar.');
           const later = [...service.jobs.values()].filter(j => j.kind==='national-job' && (j.conceptId===job.conceptId || j.fileHash===job.fileHash));
           if (later.at(-1)?.id !== job.id) throw new Error('Existe un intento posterior. Consulte el último trabajo para continuar sin duplicar operaciones.');
           const resume = job.estado==='parcial' && job.numeroOrden;
@@ -182,7 +191,6 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         const concepts = [];
         for (const original of own) {
           const upgraded = refreshConcept(original);
-          if (JSON.stringify(upgraded) !== JSON.stringify(original)) await store.save(upgraded);
           concepts.push(upgraded);
         }
         send(req,res,200,{ok:true,concepts,jobs:[...service.jobs.values()].filter(j=>j.kind==='national-job' && canRead(actor,j)).slice(-200).map(publicJob)});return true;

@@ -1,6 +1,6 @@
 import { activity, checkCancelled } from './jobs/execution.js';
 
-const normalized = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g,' ').trim().toUpperCase();
+const normalized = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s*\/\/\s*/g,' // ').replace(/\s+/g,' ').trim().toUpperCase();
 
 export function money(value) {
   let text=String(value ?? '').replace(/[^\d,.-]/g,'');
@@ -66,14 +66,16 @@ export class BiofileProducts {
   async find(product) {
     const table=await this.table();
     if(!table) return [];
-    return table.locator('tr').evaluateAll((rows, expected) => {
-      const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
-      return rows.map(r => [...r.querySelectorAll('td')].map(c => {
+    const entry=await this.entry();
+    const entryHandle=entry ? await entry.elementHandle() : null;
+    try { return await table.locator('tr').evaluateAll((rows, {expected, entry}) => {
+      const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s*\/\/\s*/g,' // ').replace(/\s+/g,' ').trim().toUpperCase();
+      return rows.filter(r=>r!==entry && r.id!=='trProducto' && !r.querySelector('[onclick*="AgregarProducto"]')).map(r => [...r.querySelectorAll('td')].map(c => {
         const selected=c.querySelector('select option:checked');
         const input=c.querySelector('input:not([type=hidden])');
         return selected ? selected.textContent.trim() : input ? input.value.trim() : c.textContent.trim();
       })).filter(cells => cells.some(c => norm(c) === expected));
-    }, normalized(product.biofileProduct));
+    }, {expected:normalized(product.biofileProduct),entry:entryHandle}); } finally { await entryHandle?.dispose(); }
   }
 
   matches(rows, product) {
@@ -81,7 +83,7 @@ export class BiofileProducts {
     const cells=rows[0];
     const qty=Number(String(cells[0] || '').replace(/[^\d.-]/g,''));
     const name=cells.some(c=>normalized(c)===normalized(product.biofileProduct));
-    return name && (!Number.isFinite(qty) || qty===Number(product.cantidad || 1));
+    return name && Number.isFinite(qty) && qty===Number(product.cantidad || 1);
   }
 
   async #addButton(entry) {
@@ -104,7 +106,7 @@ export class BiofileProducts {
     return null;
   }
 
-  async add(product) {
+  async add(product, { confirmationTimeoutMs = 15000 } = {}) {
     checkCancelled();
     const {table,entry}=await this.available();
     await activity(`Agregando ${product.biofileProduct}`, { campo: 'producto' });
@@ -118,7 +120,7 @@ export class BiofileProducts {
     const qty = cells.nth(0).locator('input:not([type=hidden])').first();
     if (await visible(qty) && await qty.isEditable().catch(()=>false)) {
       const current=String(await qty.inputValue().catch(()=>'')).trim();
-      if(!current) await qty.fill(String(product.cantidad || 1));
+      if(current!==String(product.cantidad || 1)) await qty.fill(String(product.cantidad || 1));
     }
 
     const name = cells.nth(1).locator('input:not([type=hidden])').first();
@@ -133,14 +135,13 @@ export class BiofileProducts {
     // BIOFILE completa o conserva esos valores de acuerdo con el producto y el acuerdo.
     await this.page.waitForTimeout(350);
 
-    const countBefore=await table.locator('tr').count();
     const button=await this.#addButton(entry);
     if(!button) throw new Error('BIOFILE no mostró el botón de guardar/agregar producto.');
 
     await activity('Guardando producto en BIOFILE', { persist:true, event:'PRODUCT_ADD_STARTED' });
     await button.click();
 
-    const until=Date.now()+15000;
+    const until=Date.now()+confirmationTimeoutMs;
     while(Date.now()<until){
       checkCancelled();
       const rows=await this.find(product);
@@ -151,18 +152,6 @@ export class BiofileProducts {
           cantidad:product.cantidad || 1,
           confirmadoEn:new Date().toISOString()
         };
-      }
-      const currentTable=await this.table();
-      if(currentTable && await currentTable.locator('tr').count() > countBefore) {
-        const rows=await this.find(product);
-        if(rows.length===1) {
-          return {
-            productId:product.productId,
-            nombre:product.biofileProduct,
-            cantidad:product.cantidad || 1,
-            confirmadoEn:new Date().toISOString()
-          };
-        }
       }
       await this.page.waitForTimeout(250);
     }

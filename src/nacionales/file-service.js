@@ -18,12 +18,13 @@ export async function extractFile(bytes, metadata, needsOcr) {
   const options = { timeout: 45000, maxBuffer: 4 * 1024 * 1024, windowsHide: true };
   try {
     await fs.writeFile(input, bytes, { mode: 0o600 });
-    let text = '', method = 'pdf-text';
+    let text = '', digitalText = '', method = 'pdf-text';
     if (metadata.mime === 'application/pdf') {
       const info = await exec(process.env.PDFINFO_BIN || 'pdfinfo', [input], options);
       const pages = Number(info.stdout.match(/Pages:\s*(\d+)/)?.[1] || 0);
       if (!pages || pages > Number(process.env.NACIONALES_MAX_PAGES || 10)) throw new Error('El PDF supera el límite de páginas o no se puede leer.');
       text = (await exec(process.env.PDFTOTEXT_BIN || 'pdftotext', ['-layout','-enc','UTF-8', input, '-'], options)).stdout;
+      digitalText = text;
     }
     if (!text.trim() || needsOcr(text)) {
       method = text.trim() ? 'pdf-text+ocr' : 'ocr';
@@ -38,7 +39,7 @@ export async function extractFile(bytes, metadata, needsOcr) {
       if (ocr.trim()) text = ocr;
     }
     if (!text.trim()) throw new Error('No se pudo extraer texto legible.');
-    return { text, method };
+    return { text, digitalText, method };
   } catch (error) {
     if (error.code === 'ENOENT') throw new Error('Falta instalar Poppler o Tesseract en el servidor. Revise el despliegue Docker.');
     if (error.killed) throw new Error('La lectura del archivo superó el tiempo permitido.');

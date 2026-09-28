@@ -11,7 +11,7 @@ const fields = {
   ciudadNacimiento: ['CIUDAD DE NACIMIENTO', 'LUGAR DE NACIMIENTO'], celular: ['CELULAR', 'TELEFONO', 'TELEFONOS'],
   cargo: ['CARGO', 'OCUPACION'], eps: ['EPS'], afp: ['AFP', 'FONDO DE PENSIONES'], arl: ['ARL'],
   examType: ['TIPO DE EVALUACION', 'TIPO DE EXAMEN', 'TIPO EXAMEN'],
-  cityExam: ['CIUDAD DE ATENCION', 'CIUDAD DEL EXAMEN', 'DPTO/CIUDAD DE ATENCION'],
+  cityExam: ['CIUDAD DE ATENCION', 'CIUDAD DEL EXAMEN', 'DPTO/CIUDAD DE ATENCION', 'CIUDAD DE REALIZACION', 'LUGAR DE ATENCION', 'LUGAR DE REALIZACION', 'REALIZADO EN'],
   empresa: ['EMPRESA EN MISION', 'EMPRESA']
 };
 const fold = t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
@@ -254,7 +254,14 @@ export function parseDocument(text) {
 
   const employment={cargo:clean(f.cargo),eps:clean(f.eps),afp:clean(f.afp),arl:clean(f.arl),tipoEvaluacion:evaluation(f.examType||head.slice(0,2500))};
   let cityExam=canonicalCity(f.cityExam);if(!cityExam&&['clinical-certificate','patient-admission','aptitude-sections'].includes(templateDetected))cityExam=canonicalCity(patient.municipioResidencia);
-  if(!cityExam) cityExam=inferSupportedExamCity(head);
+  const explicitCity=text.match(/(?:CIUDAD (?:DEL EXAMEN|DE ATENCION|DE REALIZACION)|LUGAR DE (?:ATENCION|REALIZACION)|REALIZADO EN)\s*:\s*([^\n]+)/i)?.[1];
+  if(explicitCity) cityExam=canonicalCity(explicitCity);
+  if(!cityExam) cityExam=inferSupportedExamCity(text);
+  // The user confirmed Pereira for the supplied location, identified by address,
+  // never by the patient's identity or file name. Useful when the footer needs OCR.
+  if(!cityExam && /CLINICA RISARALDA/.test(norm(text)) && /CALLE 19 (?:N |NO |NUMERO )?5 13/.test(norm(text))) {
+    cityExam='PEREIRA';warnings.push('Ciudad identificada por la sede Clínica Risaralda, Calle 19 5-13, verificada para Pereira.');
+  }
   if(!cityExam)warnings.push('Confirme la ciudad donde se realizó el examen.');
   for(const [k,v] of Object.entries(patient))fieldConfidence[k]={level:!v?'missing':autoFilledFields.some(x=>x.campo===k)?'review':'extracted',reason:!v?'No identificado en el documento':autoFilledFields.some(x=>x.campo===k)?'Valor calculado; confirmar en vista previa':'Valor extraído del concepto'};
   return {templateDetected,confidence:'REQUIERE_REVISION',patient,employment,cityExam,examDate,company:{alias:clean(f.empresa),acuerdoBiofile:'',empresaMisionBiofile:''},exams:examList(text),warnings,fieldConfidence,autoFilledFields};

@@ -9,6 +9,7 @@ import {
   extraerOpcionesAutocomplete,
   limpiarOpcionesCatalogo,
   resolverOpcionUnica,
+  resolverMunicipioColombia,
   textoBusquedaAutocomplete
 } from './autocomplete-biofile.js';
 
@@ -931,19 +932,21 @@ if (
       while (Date.now() < limite) {
         const candidatos = this.page.locator(selectorOpciones);
         const cantidad = await candidatos.count();
+        const municipioElegido=campoNormalizado==='MUNICIPIO' ? resolverMunicipioColombia(await candidatos.allTextContents(),valorOriginal) : '';
         for (let indice = 0; indice < cantidad; indice += 1) {
           const candidato = candidatos.nth(indice);
           if (!await candidato.isVisible().catch(() => false)) continue;
           const texto = String(await candidato.innerText().catch(() => ''))
             .trim().replace(/\s+/g, ' ');
           if (texto && !opcionesVistas.includes(texto)) opcionesVistas.push(texto);
-          if (normalizar(texto) !== valorNormalizado) continue;
+          if (normalizar(texto) !== (campoNormalizado==='MUNICIPIO' ? normalizar(municipioElegido) : valorNormalizado)) continue;
           await candidato.click({ force: true });
           opcionSeleccionada = texto;
           await this.page.waitForTimeout(300);
           return true;
         }
 
+        if (campoNormalizado==='MUNICIPIO') { await this.page.waitForTimeout(120); continue; }
         // Respaldo para variantes de AjaxControlToolkit que no conservan las
         // clases habituales: limita la búsqueda al menú de autocompletado y
         // marca el elemento hoja cuyo texto normalizado sea exactamente igual.
@@ -1026,7 +1029,7 @@ if (
     }
 
     const valorFinal = String(await locator.inputValue().catch(() => '')).trim();
-    if (normalizar(valorFinal) !== valorNormalizado) {
+    if (normalizar(valorFinal) !== (campoNormalizado==='MUNICIPIO' ? normalizar(opcionSeleccionada) : valorNormalizado)) {
       throw new Error(
         `BIOFILE seleccionó un valor incorrecto en ${etiqueta}. ` +
         `Esperado: "${valorOriginal}". Resultado: "${valorFinal}".`
