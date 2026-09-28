@@ -10,11 +10,13 @@ import { canRead, sanitizeEdit } from '../src/nacionales/index.js';
 import { money, BiofileProducts } from '../src/biofile-products.js';
 import { textoBusquedaAutocomplete } from '../src/autocomplete-biofile.js';
 
-test('product reconciliation checks configured prices across display formats',()=>{
+test('product reconciliation checks exact product and quantity without changing BIOFILE commercial fields',()=>{
   assert.equal(money('64,500'),64500);assert.equal(money('$ 64.500,00'),64500);assert.equal(money('64,500.00'),64500);
-  const p={cantidad:1,biofileProduct:'AUDIOMETRÍA',prestador:'No Aplica',formaPago:'CONTADO',valor:64500};
-  const rows=[['1','AUDIOMETRÍA','No Aplica','64,500','CONTADO']];
-  const products=new BiofileProducts({config:{selectors:{}}});assert(products.matches(rows,p));assert(!products.matches(rows,{...p,valor:100}));
+  const p={cantidad:1,biofileProduct:'AUDIOMETRÍA'};
+  const rows=[['1','AUDIOMETRÍA','Seleccione','64,500','CRÉDITO']];
+  const products=new BiofileProducts({config:{selectors:{}}});
+  assert(products.matches(rows,p));
+  assert(!products.matches([['2','AUDIOMETRÍA','Seleccione','64,500','CRÉDITO']],p));
 });
 test('labelled digital certificate preserves identity and does not collect diagnoses',()=>{
   const c=parseDocument('CERTIFICADO HISTORIA CLINICA\nIDENTIFICACION DEL PACIENTE\nIdentificación: CC - 987654321\nPrimer Nombre: ANA\nPrimer Apellido: PRUEBA\nFecha de Nacimiento: 1990-01-02\nCiudad del Examen: MEDELLIN\nTIPO EXAMEN: PERIODICO\nEXAMENES REALIZADOS\nAUDIOMETRIA TAMIZ\nCONSENTIMIENTO INFORMADO\nRECOMENDACIONES GENERALES\nDiagnóstico privado');
@@ -24,7 +26,22 @@ test('new structures use generic parser and missing identity stays missing',()=>
 test('normalization validates dates, named months, cities and evaluations',()=>{assert.equal(date('31/02/2000'),'');assert.equal(date('02/01/1990'),'1990-01-02');assert.equal(date('27/Sep/1989'),'1989-09-27');assert.equal(date('27 DE JULIO 2026'),'2026-07-27');assert.equal(canonicalCity('NOR. SANTANDER / CÚCUTA'),'CÚCUTA');assert.equal(canonicalCity('BARRANQUILLA (ATLÁNTICO, COLOMBIA)'),'BARRANQUILLA');assert.equal(evaluation('retiro'),'EGRESO');assert.equal(evaluation('PRE-INGRESO'),'INGRESO');assert.equal(evaluation('POST-INCAPACIDAD'),'POST INCAPACIDAD');assert.equal(evaluation('no identificado'),'');assert.equal(splitNames('ANA MARIA PRUEBA DEMO').primerApellido,'PRUEBA');});
 test('controlled defaults complete Nacionales operational fields and mark estimates',()=>{const c=applyDefaults(parseDocument('Ciudad del Examen: CALI'));assert.equal(c.patient.numeroDocumento,'');assert.equal(c.patient.correo,'');assert.match(c.patient.fechaNacimiento,/^\d{4}-\d{2}-\d{2}$/);assert.equal(c.patient.municipioResidencia,'CALI');assert.equal(c.patient.ciudadNacimiento,'CALI');assert.equal(c.patient.genero,'MASCULINO');assert.equal(c.patient.estadoCivil,'SOLTERO(A)');assert.equal(c.patient.nivelEducativo,'SECUNDARIA');assert.equal(c.employment.tipoEvaluacion,'INGRESO');assert(c.autoFilledFields.some(f=>f.campo==='fechaNacimiento'));assert(c.autoFilledFields.some(f=>f.campo==='genero'));assert(c.autoFilledFields.some(f=>f.campo==='tipoEvaluacion'));assert.equal(c.employment.eps,'NO REFIERE');});
 test('canonical exams exclude consent and preserve distinct visual tests',()=>{assert.deepEqual(examList('EXAMENES REALIZADOS\nAUDIOMETRIA TAMIZ\nVISIOMETRIA\nOPTOMETRIA\nCONSENTIMIENTO INFORMADO\nRECOMENDACIONES'),['AUDIOMETRÍA','VISIOMETRÍA','OPTOMETRÍA']);});
-test('city product catalog maps Nacionales exams automatically',()=>{const cali=mapProducts({cityExam:'CALI',exams:['AUDIOMETRÍA','VISIOMETRÍA','OPTOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']},[]);assert.equal(cali.errors.length,0);assert.deepEqual(cali.products.map(p=>p.productId),['207','163','184','2']);assert.equal(automaticProductMapping('CÚCUTA','AUDIOMETRÍA').productId,'492');assert.equal(automaticProductMapping('MEDELLÍN','EXAMEN MÉDICO OCUPACIONAL').productId,'699');assert.equal(automaticProductMapping('BUCARAMANGA','VISIOMETRÍA').productId,'702');assert.equal(automaticProductMapping('PEREIRA','EXAMEN MÉDICO OCUPACIONAL').productId,'1');assert.equal(automaticProductMapping('SOPÓ','AUDIOMETRÍA').biofileProduct,'AUDIOMETRIA // SOPO');assert.equal(automaticProductMapping('SOPÓ','VISIOMETRÍA').biofileProduct,'VISIOMETRIA // SOPO');assert.equal(automaticProductMapping('SOPÓ','EXAMEN MÉDICO OCUPACIONAL').biofileProduct,'EXAMEN MEDICO OCUPACIONAL // SOPO');assert.equal(catalog.length,1008);assert.equal(new Set(catalog.map(p=>p.id)).size,1008);});
+test('city product catalog maps Nacionales exams automatically',()=>{
+  const cali=mapProducts({cityExam:'CALI',exams:['AUDIOMETRÍA','VISIOMETRÍA','OPTOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']},[]);
+  assert.equal(cali.errors.length,0);
+  assert.deepEqual(cali.products.map(p=>p.productId),['207','163','184','179','2']);
+  assert.equal(automaticProductMapping('CÚCUTA','AUDIOMETRÍA').productId,'492');
+  assert.equal(automaticProductMapping('MEDELLÍN','EXAMEN MÉDICO OCUPACIONAL').productId,'699');
+  assert.equal(automaticProductMapping('BUCARAMANGA','VISIOMETRÍA').productId,'702');
+  assert.equal(automaticProductMapping('PEREIRA','EXAMEN MÉDICO OCUPACIONAL').productId,'408');
+  const pereira=mapProducts({cityExam:'PEREIRA',exams:['AUDIOMETRÍA','VISIOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']},[]);
+  assert.deepEqual(pereira.products.map(p=>p.biofileProduct),['AUDIOMETRIA // PEREIRA','VISIOMETRIA // PEREIRA','ANEXO OSTEOMUSCULAR //PEREIRA','EXAMEN MEDICO OSTEOMUSCULAR // PEREIRA']);
+  assert.equal(automaticProductMapping('SOPÓ','AUDIOMETRÍA').biofileProduct,'AUDIOMETRIA // SOPO');
+  assert.equal(automaticProductMapping('SOPÓ','VISIOMETRÍA').biofileProduct,'VISIOMETRIA // SOPO');
+  assert.equal(automaticProductMapping('SOPÓ','EXAMEN MÉDICO OCUPACIONAL').biofileProduct,'EXAMEN MEDICO OCUPACIONAL // SOPO');
+  assert.equal(catalog.length,1008);
+  assert.equal(new Set(catalog.map(p=>p.id)).size,1008);
+});
 test('file signatures, MIME, extension and duplicate hashes are enforced',()=>{const b=Buffer.from('%PDF-1.7 synthetic');const a=validateFile('../unsafe.pdf','application/pdf',b);assert.equal(a.sourceFile,'unsafe.pdf');assert.equal(a.fileHash,validateFile('copy.pdf','application/pdf',b).fileHash);assert.throws(()=>validateFile('bad.png','image/png',b));assert.throws(()=>validateFile('bad.exe','application/pdf',b));});
 test('all roles can read own jobs, only superadmin can read another owner',()=>{for(const rol of ['user','admin','superadmin'])assert(canRead({id:'a',rol},{usuarioId:'a'}));assert(!canRead({id:'b',rol:'admin'},{usuarioId:'a'}));assert(canRead({id:'b',rol:'superadmin'},{usuarioId:'a'}));});
 test('client cannot overwrite server identity, file hash or products',()=>{const source={id:'original',fileHash:'hash',patient:{numeroDocumento:'123456'},employment:{cargo:''}};const c=sanitizeEdit({id:'evil',fileHash:'evil',products:[{}],patient:{numeroDocumento:'999999',secret:'evil'},companyAgreement:'  CENTU  ',reviewed:true},source);assert.equal(c.id,'original');assert.equal(c.fileHash,'hash');assert.equal(c.patient.numeroDocumento,'999999');assert.equal(c.patient.secret,undefined);assert.equal(c.products,undefined);assert.equal(c.companyAgreement,'CENTU');});
@@ -66,4 +83,15 @@ test('product autocomplete searches by base name but preserves exact city produc
   assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','AUDIOMETRIA // CUCUTA'),'AUDIOMETRIA');
   assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','VISIOMETRIA // MEDELLIN'),'VISIOMETRIA');
   assert.equal(textoBusquedaAutocomplete('Nombre del Producto o Servicio','OPTOMETRIA // CALI'),'OPTOMETRIA');
+});
+
+test('generic city inference identifies Pereira without requiring a labelled city field',()=>{
+  const c=parseDocument('CENTRO MEDICO OCUPACIONAL PEREIRA\nPaciente: PRUEBA TEST\nCC 123456789\nEXAMENES REALIZADOS\nAUDIOMETRIA\nVISIOMETRIA\nEXAMEN MEDICO OCUPACIONAL\nRECOMENDACIONES');
+  assert.equal(c.cityExam,'PEREIRA');
+});
+
+test('missing city does not create repeated product mapping warnings',()=>{
+  const result=mapProducts({cityExam:'',exams:['AUDIOMETRÍA','VISIOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']},[]);
+  assert.deepEqual(result.products,[]);
+  assert.deepEqual(result.errors,[]);
 });
