@@ -27,17 +27,16 @@ export async function processNational({ usuario, job, onProgress, signal }) {
     const registro = { ...p, otrosNombres: p.segundoNombre, fechaNacimiento: p.fechaNacimiento.split('-').reverse().join('/'), profesionCargo: employment.cargo, funcionesCargo: employment.cargo, eps: employment.eps, afp: employment.afp, arl: employment.arl, row: 0 };
     const tipo = normalizarTipoEvaluacion(employment.tipoEvaluacion);
     if (!tipo) throw new Error('Tipo de evaluación no disponible en BIOFILE.');
-    await onProgress({ porcentaje: 52, etapa: 'Diligenciando paciente' });
+    await onProgress({ porcentaje: 52, etapa: 'Diligenciando paciente', detalle:'Completando los datos de la orden. Los productos se agregan únicamente después de crear la O.S.' });
     await client.llenarOrden(registro, { ...config.defaults, strictCompany: true, tipoEvaluacion: tipo, acuerdo: job.company.acuerdoBiofile, empresaMision: job.company.empresaMisionBiofile, paquete: 'NO APLICA', productoServicio: '', eps: employment.eps, afp: employment.afp, arl: employment.arl });
-    // Fail before saving if the observed product controls are absent.
-    await products.available();
-    await onProgress({ porcentaje: 72, etapa: 'Validando orden', ultimoPasoEjecutado: 'Formulario diligenciado' });
-    await onProgress({ porcentaje: 78, etapa: 'Guardando orden', guardadoIntentado: true, event: 'ORDER_SUBMIT_INTENT' });
+    await onProgress({ porcentaje: 72, etapa: 'Validando orden', detalle:'Formulario principal diligenciado. Preparando creación de la orden.', ultimoPasoEjecutado: 'Formulario diligenciado' });
+    await onProgress({ porcentaje: 78, etapa: 'Creando orden en BIOFILE', detalle:'Guardando primero la orden, sin agregar productos todavía.', guardadoIntentado: true, event: 'ORDER_SUBMIT_INTENT' });
     await client.guardarYCerrarExito();
     await onProgress({ guardadoConfirmado: true, persist: true, event: 'ORDER_CONFIRMED' });
     numeroOrden = await client.obtenerNumeroOrden();
     if (!numeroOrden) throw new Error('BIOFILE confirmó el guardado pero no se pudo leer la orden. Verifique antes de continuar.');
-    await onProgress({ porcentaje: 82, etapa: 'Orden creada', numeroOrden, ultimoPasoEjecutado: 'Orden confirmada' });
+    await onProgress({ porcentaje: 82, etapa: 'Orden creada', detalle:'O.S. '+numeroOrden+' creada correctamente. Ahora se habilitarán y agregarán los productos.', numeroOrden, ultimoPasoEjecutado: 'Orden confirmada' });
+    await products.available({ timeoutMs: 20000 });
     }
     const added = [];
     const previouslyConfirmed = job.productosAgregados || [];
