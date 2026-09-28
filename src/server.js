@@ -147,6 +147,16 @@ const DIRECTORIO_SYNC_INTERVAL_MS = Math.max(
   Number(process.env.BIOFILE_CLIENTES_SYNC_INTERVAL_MS || 24 * 60 * 60 * 1000)
 );
 
+function hayTrabajosBiofileActivos() {
+  return [...jobs.values()].some(j => ['en_cola','procesando'].includes(j.estado));
+}
+function horaBogota() {
+  return Number(new Intl.DateTimeFormat('en-GB', { timeZone:'America/Bogota', hour:'2-digit', hourCycle:'h23' }).format(new Date()));
+}
+function mantenimientoAutomaticoPermitido() {
+  return !hayTrabajosBiofileActivos() && horaBogota() < 5;
+}
+
 function usuarioDirectorioEmpresas(preferido = null) {
   if (preferido?.usuario && preferido?.contrasena) return preferido;
   return typeof usuarioCatalogoAutomatico === 'function' ? usuarioCatalogoAutomatico() : (config.usuariosEntorno[0] || null);
@@ -179,6 +189,7 @@ async function directorioVencido() {
 
 function programarSincronizacionEmpresas({ force = false, completo = false, usuarioPreferido = null } = {}) {
   if (sincronizacionEmpresasActiva) return sincronizacionEmpresasActiva;
+  if (!force && !mantenimientoAutomaticoPermitido()) return Promise.resolve({ omitida:true, motivo:'mantenimiento_fuera_de_ventana_o_biofile_ocupado' });
   sincronizacionEmpresasActiva = (async () => {
     const control = await directorioVencido();
     if (!force && !control.vencido) return { omitida: true, motivo: 'directorio_fresco', estado: control.estado };
