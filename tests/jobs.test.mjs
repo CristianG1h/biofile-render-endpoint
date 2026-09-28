@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JobService, recoverJob } from '../src/jobs/job-service.js';
+import { waitForAccountTurn } from '../src/browser.js';
 const actor={id:'a',usuario:'TEST',rol:'user'};
 class MemoryStore {items=new Map();async init(){} async save(j){this.items.set(j.id,structuredClone(j));}}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -43,4 +44,16 @@ test('automatic retries are bounded and stop at the first save intent',async()=>
     const next=await service.enqueue({documento:'456'},actor,async({onProgress})=>{unsafeAttempts++;await onProgress({guardadoIntentado:true,persist:true});throw new Error('ECONNRESET');});
     await Promise.all(service.queues.values());assert.equal(unsafeAttempts,1);assert.equal(next.job.reintentable,false);
   } finally {if(old===undefined)delete process.env.JOB_MAX_AUTO_RETRIES;else process.env.JOB_MAX_AUTO_RETRIES=old;}
+});
+
+test('BIOFILE account turn wait is abort-aware and cannot leave a job hanging forever',async()=>{
+  const controller=new AbortController();
+  setTimeout(()=>controller.abort(new Error('cancelled wait')),10);
+  await assert.rejects(waitForAccountTurn(new Promise(()=>{}),{signal:controller.signal,timeoutMs:200}),/cancelled wait/);
+});
+test('BIOFILE account turn wait returns a clear retryable busy error',async()=>{
+  await assert.rejects(
+    waitForAccountTurn(new Promise(()=>{}),{timeoutMs:15}),
+    error=>error.code==='BIOFILE_SESSION_BUSY' && /ocupada/i.test(error.message)
+  );
 });
