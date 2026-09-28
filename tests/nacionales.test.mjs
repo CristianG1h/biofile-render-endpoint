@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDocument, examList } from '../src/nacionales/parser.js';
+import { parseDocument, examList, repairStoredConcept } from '../src/nacionales/parser.js';
 import { date, evaluation, splitNames, canonicalCity } from '../src/nacionales/normalize.js';
 import { applyDefaults } from '../src/nacionales/defaults.js';
 import { validateConcept } from '../src/nacionales/validators.js';
@@ -30,3 +30,22 @@ test('client cannot overwrite server identity, file hash or products',()=>{const
 
 test('worker-table does not confuse age with names and derives birth date',()=>{const c=parseDocument('CONCEPTO MÉDICO OCUPACIONAL PERIODICO\nFECHA Y CIUDAD DE REALIZACIÓN DEL EXÁMEN\nBARRANQUILLA (ATLÁNTICO, COLOMBIA)\n30       07       2026\nDATOS DEL TRABAJADOR / ASPIRANTE\nApellidos y Nombres                                                   Género                   Edad                      Documento de Identificación\n\n32 AÑOS 11           CC                  1101817403\nESPINOZA CAUSADO BAIRON JOSE                                                       MASCULINO                 MESES 0 DÍAS\nCargo\nASESOR DE VENTAS\nEPS                                                                 AFP                                                                 ARL\nMUTUALSER                                                         COLPENSIONES                                                                  SURA\nCONCEPTO DE APTITUD\nEXAMENES REALIZADOS\nAUDIOMETRIA TAMIZ VISIOMETRIA EXAMEN MEDICO OCUPACIONAL');assert.equal(c.patient.numeroDocumento,'1101817403');assert.equal(c.patient.primerNombre,'BAIRON');assert.equal(c.patient.segundoNombre,'JOSE');assert.equal(c.patient.primerApellido,'ESPINOZA');assert.equal(c.patient.segundoApellido,'CAUSADO');assert.equal(c.patient.fechaNacimiento,'1993-08-30');assert.equal(c.patient.genero,'MASCULINO');assert.equal(c.cityExam,'BARRANQUILLA');assert.equal(c.employment.cargo,'ASESOR DE VENTAS');assert.equal(c.employment.tipoEvaluacion,'PERIÓDICO');});
 test('Cali named-month format extracts patient and city',()=>{const c=parseDocument('CONCEPTO MEDICO OCUPACIONAL CON ENFASIS OSTEOMUSCULAR PERIODICO\nFecha: 28/Jul/2026                                                      Edad: 36 años\nApellido: CARMONA CHACON                                                Nombre: DIEGO ALEJANDRO\nTipo Doc: CC                     Nro Identidad: 1143928053              Sexo: Masculino\nNacim: 27/Sep/1989\nEstado Civil: UNION LIBRE        EPS: COMFENALCO                        ARL:                      AFP: PORVENIR\nCargo: ASESOR DE VENTAS                                                 Ciudad: CALI -VALLE\nEXAMENES REALIZADOS\nAUDIOMETRIA TAMIZ VISIOMETRIA EXAMEN MEDICO OCUPACIONAL');assert.equal(c.patient.fechaNacimiento,'1989-09-27');assert.equal(c.patient.primerNombre,'DIEGO');assert.equal(c.patient.segundoNombre,'ALEJANDRO');assert.equal(c.patient.primerApellido,'CARMONA');assert.equal(c.patient.segundoApellido,'CHACON');assert.equal(c.cityExam,'CALI');});
+
+test('stored worker-table identities corrupted by age are repaired from filename',()=>{
+  const old={templateDetected:'worker-table',sourceFile:'BERMEJO CARO OMAR HABIB.pdf',reviewed:true,patient:{primerNombre:'10',segundoNombre:'28',primerApellido:'AÑOS',segundoApellido:''},autoFilledFields:[],warnings:[]};
+  const c=repairStoredConcept(old);
+  assert.equal(c.patient.primerNombre,'OMAR');
+  assert.equal(c.patient.segundoNombre,'HABIB');
+  assert.equal(c.patient.primerApellido,'BERMEJO');
+  assert.equal(c.patient.segundoApellido,'CARO');
+  assert.equal(c.reviewed,false);
+  assert(c.warnings.some(x=>/Identidad recuperada/i.test(x)));
+});
+test('stored worker-table filename supports compound given names',()=>{
+  const old={templateDetected:'worker-table',sourceFile:'DIAZ ROCHA MARIA DE LOS ANGELES-CONCEPTO MEDICO.pdf',patient:{primerNombre:'7',segundoNombre:'24',primerApellido:'AÑOS',segundoApellido:''},autoFilledFields:[],warnings:[]};
+  const c=repairStoredConcept(old);
+  assert.equal(c.patient.primerNombre,'MARIA');
+  assert.equal(c.patient.segundoNombre,'DE LOS ANGELES');
+  assert.equal(c.patient.primerApellido,'DIAZ');
+  assert.equal(c.patient.segundoApellido,'ROCHA');
+});
