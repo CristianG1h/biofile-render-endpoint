@@ -54,7 +54,8 @@ export function automaticProductMappings(city, exam) {
 }
 
 export function automaticProductMapping(city, exam) {
-  return automaticProductMappings(city, exam)[0] || null;
+  const resolved=automaticProductMappings(city, exam);
+  return resolved.at(-1) || null;
 }
 
 export function validateProductMapping(value) {
