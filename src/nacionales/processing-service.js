@@ -7,10 +7,12 @@ export async function processNational({ usuario, job, onProgress, signal }) {
   const cfg = { ...configParaUsuario(usuario), strictOrder: true };
   let session;
   try {
-    await onProgress({ porcentaje: 35, etapa: 'Verificando sesión BIOFILE' });
+    await onProgress({ porcentaje: 35, etapa: 'Abriendo sesión BIOFILE', detalle:'Solicitando una sesión disponible para este usuario.' });
     session = await crearSesion(cfg, null);
+    await onProgress({ porcentaje: 38, etapa: 'Iniciando sesión en BIOFILE', detalle:'BIOFILE está disponible. Verificando credenciales y formulario.' });
     const client = new BiofileClient({ page: session.page, context: session.context, config: cfg, logger: null });
     await session.asegurarLogin(); signal.throwIfAborted();
+    await onProgress({ porcentaje: 42, etapa: 'Sesión BIOFILE verificada', detalle:'Sesión lista. Preparando la orden de servicio.' });
     const products = new BiofileProducts(client);
     let numeroOrden = job.numeroOrden || '';
     if (numeroOrden) {
