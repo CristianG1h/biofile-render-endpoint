@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "description": "Productos BIOFILE exactos organizados para las 16 ciudades detectadas en el flujo Nacionales. Los nombres se toman del catálogo importado; los mapeos manuales de Super Admin tienen prioridad.",
+  "version": 3,
+  "description": "Productos BIOFILE exactos organizados para las 16 ciudades del flujo Nacionales. Cada examen puede corresponder a uno o varios productos BIOFILE. Para examen médico ocupacional se incluye el anexo osteomuscular cuando aplica en la operación.",
   "defaults": {
     "prestador": "No Aplica",
     "formaPago": "CONTADO",
@@ -12,96 +12,144 @@
       "AUDIOMETRÍA": "4",
       "VISIOMETRÍA": "7",
       "OPTOMETRÍA": "6",
-      "EXAMEN MÉDICO OCUPACIONAL": "1"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "935",
+        "1"
+      ]
     },
     "MEDELLÍN": {
       "AUDIOMETRÍA": "708",
       "VISIOMETRÍA": "180",
       "OPTOMETRÍA": "261",
-      "EXAMEN MÉDICO OCUPACIONAL": "699"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "257",
+        "699"
+      ]
     },
     "BARRANQUILLA": {
       "AUDIOMETRÍA": "175",
       "VISIOMETRÍA": "295",
       "OPTOMETRÍA": "224",
-      "EXAMEN MÉDICO OCUPACIONAL": "251"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "264",
+        "251"
+      ]
     },
     "CALI": {
       "AUDIOMETRÍA": "207",
       "VISIOMETRÍA": "163",
       "OPTOMETRÍA": "184",
-      "EXAMEN MÉDICO OCUPACIONAL": "2"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "179",
+        "2"
+      ]
     },
     "PEREIRA": {
       "AUDIOMETRÍA": "409",
       "VISIOMETRÍA": "410",
       "OPTOMETRÍA": "658",
-      "EXAMEN MÉDICO OCUPACIONAL": "1"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "533",
+        "408"
+      ]
     },
     "CARTAGENA": {
       "AUDIOMETRÍA": "201",
       "VISIOMETRÍA": "161",
       "OPTOMETRÍA": "248",
-      "EXAMEN MÉDICO OCUPACIONAL": "166"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "289",
+        "166"
+      ]
     },
     "VILLAVICENCIO": {
       "AUDIOMETRÍA": "205",
       "VISIOMETRÍA": "199",
       "OPTOMETRÍA": "228",
-      "EXAMEN MÉDICO OCUPACIONAL": "256"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "756",
+        "256"
+      ]
     },
     "VALLEDUPAR": {
       "AUDIOMETRÍA": "549",
       "VISIOMETRÍA": "548",
       "OPTOMETRÍA": "774",
-      "EXAMEN MÉDICO OCUPACIONAL": "547"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "657",
+        "547"
+      ]
     },
     "MONTERÍA": {
       "AUDIOMETRÍA": "170",
       "VISIOMETRÍA": "705",
       "OPTOMETRÍA": "466",
-      "EXAMEN MÉDICO OCUPACIONAL": "365"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "366",
+        "365"
+      ]
     },
     "TUNJA": {
       "AUDIOMETRÍA": "676",
       "VISIOMETRÍA": "723",
       "OPTOMETRÍA": "432",
-      "EXAMEN MÉDICO OCUPACIONAL": "431"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "700",
+        "431"
+      ]
     },
     "SANTA MARTA": {
       "AUDIOMETRÍA": "455",
       "VISIOMETRÍA": "712",
       "OPTOMETRÍA": "454",
-      "EXAMEN MÉDICO OCUPACIONAL": "384"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "711",
+        "384"
+      ]
     },
     "MANIZALES": {
       "AUDIOMETRÍA": "363",
       "VISIOMETRÍA": "364",
       "OPTOMETRÍA": "393",
-      "EXAMEN MÉDICO OCUPACIONAL": "361"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "362",
+        "361"
+      ]
     },
     "CÚCUTA": {
       "AUDIOMETRÍA": "492",
       "VISIOMETRÍA": "886",
       "OPTOMETRÍA": "490",
-      "EXAMEN MÉDICO OCUPACIONAL": "453"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "552",
+        "453"
+      ]
     },
     "CARTAGO": {
       "AUDIOMETRÍA": "923",
       "VISIOMETRÍA": "921",
       "OPTOMETRÍA": "469",
-      "EXAMEN MÉDICO OCUPACIONAL": "470"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "922",
+        "470"
+      ]
     },
     "BUCARAMANGA": {
       "AUDIOMETRÍA": "267",
       "VISIOMETRÍA": "702",
       "OPTOMETRÍA": "269",
-      "EXAMEN MÉDICO OCUPACIONAL": "270"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "337",
+        "270"
+      ]
     },
     "SOPÓ": {
       "AUDIOMETRÍA": "998",
       "VISIOMETRÍA": "997",
-      "EXAMEN MÉDICO OCUPACIONAL": "995"
+      "EXAMEN MÉDICO OCUPACIONAL": [
+        "996",
+        "995"
+      ]
     }
   }
 }
