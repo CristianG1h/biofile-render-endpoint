@@ -55,4 +55,16 @@ export class JobStore {
     });
     this.tail = task; return task;
   }
+  delete(id) {
+    const task = this.tail.catch(() => {}).then(async () => {
+      const row = this.rows.get(id);
+      if (!row) return false;
+      await this.write(row, ['', '']);
+      this.items.delete(id);
+      this.rows.delete(id);
+      return true;
+    });
+    this.tail = task;
+    return task;
+  }
 }
