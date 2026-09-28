@@ -3,10 +3,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { validateFile, extractFile } from './file-service.js';
-import { parseDocument } from './parser.js';
+import { parseDocument, repairStoredConcept } from './parser.js';
 import { applyDefaults } from './defaults.js';
 import { validateConcept } from './validators.js';
-import { catalog, mapProducts, mappingKey, validateProductMapping } from './product-mapper.js';
+import { catalog, automaticCityMap, mapProducts, mappingKey, validateProductMapping } from './product-mapper.js';
 import { processNational } from './processing-service.js';
 import { norm } from './normalize.js';
 export const canRead = (actor, item) => actor.id === item.usuarioId || actor.rol === 'superadmin';
@@ -69,7 +69,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
     return { errors, company, products: mapped.products };
   };
   const refreshConcept = concept => {
-    const upgraded = applyDefaults(concept);
+    const upgraded = applyDefaults(repairStoredConcept(concept));
     upgraded.validationErrors = prepare(upgraded).errors;
     upgraded.estado = upgraded.validationErrors.length ? 'REQUIERE_REVISION' : 'LISTO';
     return upgraded;
