@@ -100,7 +100,7 @@ export class JobService {
     } catch (error) {
       job.numeroOrden ||= error.detalle?.numeroOrden || '';
       job.estado = job.numeroOrden || job.guardadoConfirmado ? 'parcial' : controller.signal.aborted ? 'interrumpido' : 'error';
-      job.reintentable = !job.guardadoIntentado && !job.numeroOrden && /timeout|network|fetch|naveg|conex|interrump/i.test(error.message);
+      job.reintentable = !job.guardadoIntentado && !job.numeroOrden && /timeout|network|fetch|naveg|conex|interrump|sesión|sesion|ocupad|turno|busy/i.test(error.message);
       if (error.detalle?.captura) job.captura = error.detalle.captura;
       job.error = { mensaje: String(error.message).slice(0, 700), codigo: error.code || 'JOB_FAILED', etapa: job.etapa, campo: error.campo || job.campo || '', selector: error.selector || job.selector || '', numeroOrden: job.numeroOrden, ultimoPasoEjecutado: job.ultimoPasoEjecutado || '', reintentable: job.reintentable };
       job.detalle = job.error.mensaje;
