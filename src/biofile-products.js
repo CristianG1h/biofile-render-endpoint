@@ -10,8 +10,18 @@ export function money(value) {
 export class BiofileProducts {
   constructor(client) { this.client = client; this.page = client.page; this.selectors = client.config.selectors.products || {}; }
   table() { return this.page.locator(this.selectors.table || '#TbProducto'); }
-  async available() {
-    if (await this.table().count() !== 1 || await this.page.locator(this.selectors.entry || '#trProducto').count() !== 1) throw new Error('No se encontró la tabla de productos. Configure selectors.products con el DOM verificado.');
+  async available({ timeoutMs = 15000 } = {}) {
+    const tableSelector = this.selectors.table || '#TbProducto';
+    const entrySelector = this.selectors.entry || '#trProducto';
+    try {
+      await this.page.locator(tableSelector).waitFor({ state:'attached', timeout:timeoutMs });
+      await this.page.locator(entrySelector).waitFor({ state:'attached', timeout:timeoutMs });
+    } catch {
+      throw new Error('La orden fue creada, pero BIOFILE no mostró todavía la sección de productos. No se creará otra orden; reintente únicamente la carga de productos sobre la O.S. existente.');
+    }
+    if (await this.table().count() !== 1 || await this.page.locator(entrySelector).count() !== 1) {
+      throw new Error('La orden fue creada, pero la sección de productos no tiene una estructura válida. No se creará otra orden; revise la O.S. existente.');
+    }
   }
   async find(product) {
     return this.table().locator('tr').evaluateAll((rows, expected) => {
