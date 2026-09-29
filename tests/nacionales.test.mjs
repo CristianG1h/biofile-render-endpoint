@@ -7,7 +7,7 @@ import { validateConcept } from '../src/nacionales/validators.js';
 import { mapProducts, catalog, automaticProductMapping } from '../src/nacionales/product-mapper.js';
 import { validateFile } from '../src/nacionales/file-service.js';
 import { canRead, sanitizeEdit } from '../src/nacionales/index.js';
-import { money, BiofileProducts } from '../src/biofile-products.js';
+import { money, BiofileProducts, needsMinimumUnitPrice } from '../src/biofile-products.js';
 import { textoBusquedaAutocomplete } from '../src/autocomplete-biofile.js';
 
 test('product reconciliation checks exact product and quantity without changing BIOFILE commercial fields',()=>{
@@ -94,4 +94,22 @@ test('missing city does not create repeated product mapping warnings',()=>{
   const result=mapProducts({cityExam:'',exams:['AUDIOMETRÍA','VISIOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']},[]);
   assert.deepEqual(result.products,[]);
   assert.deepEqual(result.errors,[]);
+});
+
+test('zero unit price must be corrected before saving any BIOFILE product',()=>{
+  assert.equal(needsMinimumUnitPrice('0'),true);
+  assert.equal(needsMinimumUnitPrice('0,00'),true);
+  assert.equal(needsMinimumUnitPrice(''),true);
+  assert.equal(needsMinimumUnitPrice('1'),false);
+  assert.equal(needsMinimumUnitPrice('24,700'),false);
+});
+test('product workflow only forces Vr. Unitario when BIOFILE leaves it at zero',async()=>{
+  const fs=await import('node:fs/promises');
+  const source=await fs.readFile(new URL('../src/biofile-products.js',import.meta.url),'utf8');
+  const select=source.indexOf('seleccionarProductoExacto');
+  const unit=source.indexOf('#ensurePositiveUnitPrice(cells)',select);
+  const save=source.indexOf("activity('Guardando producto en BIOFILE'",unit);
+  assert(select>=0&&unit>select&&save>unit,'Vr. Unitario debe validarse después de seleccionar el producto y antes de guardarlo');
+  assert(source.includes("await unit.fill('1')"));
+  assert(source.includes('Prestador y Forma de Pago se conservan'));
 });
