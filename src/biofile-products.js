@@ -13,6 +13,11 @@ export function money(value) {
   return Number(text);
 }
 
+export function needsMinimumUnitPrice(value) {
+  const parsed=money(value);
+  return !Number.isFinite(parsed) || parsed <= 0;
+}
+
 async function visible(locator) {
   try { return await locator.count() > 0 && await locator.first().isVisible(); }
   catch { return false; }
@@ -106,6 +111,51 @@ export class BiofileProducts {
     return null;
   }
 
+  async #ensurePositiveUnitPrice(cells) {
+    const unit = cells.nth(3).locator('input:not([type=hidden])').first();
+    if (!await visible(unit)) return { changed:false, value:NaN };
+
+    // BIOFILE a veces tarda unos milisegundos en cargar el precio del producto.
+    // Si llega un valor válido (>0), se conserva exactamente como lo puso BIOFILE.
+    const until=Date.now()+1000;
+    let current=money(await unit.inputValue().catch(()=>''));
+    while(Date.now()<until && needsMinimumUnitPrice(current)){
+      await this.page.waitForTimeout(100);
+      current=money(await unit.inputValue().catch(()=>''));
+    }
+    if(!needsMinimumUnitPrice(current)) return { changed:false, value:current };
+
+    if(!await unit.isEditable().catch(()=>false)) {
+      throw new Error('BIOFILE dejó el Vr. Unitario en 0 y el campo no permite corregirlo automáticamente.');
+    }
+
+    await unit.click({clickCount:3}).catch(()=>{});
+    await unit.fill('1');
+    await unit.evaluate(el=>{
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      el.dispatchEvent(new Event('change',{bubbles:true}));
+    }).catch(()=>{});
+    await unit.press('Tab').catch(()=>{});
+    await this.page.waitForTimeout(150);
+
+    let confirmed=money(await unit.inputValue().catch(()=>''));
+    if(needsMinimumUnitPrice(confirmed)){
+      // Algunos onchange de BIOFILE vuelven a escribir 0. Se fuerza una vez más
+      // justo antes de guardar el producto para no enviar un campo rojo.
+      await unit.fill('1');
+      confirmed=money(await unit.inputValue().catch(()=>''));
+    }
+    if(needsMinimumUnitPrice(confirmed)) {
+      throw new Error('No fue posible establecer un Vr. Unitario mínimo de 1 para el producto.');
+    }
+
+    await activity('Vr. Unitario ajustado a 1 porque BIOFILE lo dejó en 0', {
+      campo:'valorUnitario',
+      persist:true
+    });
+    return { changed:true, value:confirmed };
+  }
+
   async add(product, { confirmationTimeoutMs = 15000 } = {}) {
     checkCancelled();
     const {table,entry}=await this.available();
@@ -131,15 +181,28 @@ export class BiofileProducts {
       throw new Error(`BIOFILE no seleccionó exactamente “${product.biofileProduct}”.`);
     }
 
-    // No modificar Prestador, Vr. Unitario, Forma de Pago ni Vr. Pagar.
-    // BIOFILE completa o conserva esos valores de acuerdo con el producto y el acuerdo.
+    // Prestador y Forma de Pago se conservan tal como BIOFILE los cargue.
+    // Vr. Unitario también se conserva, excepto cuando BIOFILE lo deja vacío o en 0:
+    // en ese único caso se establece el mínimo 1 para que el producto pueda guardarse.
     await this.page.waitForTimeout(350);
+    await this.#ensurePositiveUnitPrice(cells);
 
     const button=await this.#addButton(entry);
     if(!button) throw new Error('BIOFILE no mostró el botón de guardar/agregar producto.');
 
     await activity('Guardando producto en BIOFILE', { persist:true, event:'PRODUCT_ADD_STARTED' });
     await button.click();
+
+    // Respaldo para el mensaje "Ingrese los campos en rojo": si BIOFILE vuelve a
+    // dejar el unitario en 0 en el instante del guardado, corrige y reintenta una vez.
+    await this.page.waitForTimeout(250);
+    const redAlert=this.page.getByText(/Ingrese los campos en rojo para guardar el producto/i).first();
+    if(await visible(redAlert)){
+      const understood=this.page.getByRole('button',{name:/Entendido/i}).first();
+      if(await visible(understood)) await understood.click().catch(()=>{});
+      await this.#ensurePositiveUnitPrice(cells);
+      await button.click();
+    }
 
     const until=Date.now()+confirmationTimeoutMs;
     while(Date.now()<until){
