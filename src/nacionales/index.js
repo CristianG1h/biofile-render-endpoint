@@ -64,7 +64,8 @@ export function createNationalApi({ service, ready, send, companies, screenshots
     const owns = actor.id === concept.usuarioId;
     const superadmin = actor.rol === 'superadmin';
     return {
-      canEdit: !concept.deletedAt && (owns || superadmin),
+      canEdit: !concept.deletedAt && owns,
+      canProcess: !concept.deletedAt && owns,
       canSoftDelete: !concept.deletedAt && (owns || superadmin),
       canRestore: Boolean(concept.deletedAt) && (owns || superadmin),
       canPurge: Boolean(concept.deletedAt) && superadmin
