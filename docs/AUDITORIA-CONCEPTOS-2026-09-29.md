@@ -1,5 +1,11 @@
 # Auditoría del ZIP de conceptos — 29 de septiembre de 2026
 
+## Corrección posterior de rendimiento
+
+La doble pasada de OCR de página completa produjo una regresión en el formato compacto: el PDF señalado después de la auditoría tardó 13,6 segundos en extracción local. Se sustituyó por una primera lectura de la franja inferior (20 % de la página), manteniendo resolución para reconocer la dirección de la sede. Tres muestras, incluida la reportada, tardaron entre 1,6 y 1,9 segundos y conservaron Pereira. Estas mediciones no incluyen red ni persistencia del servidor.
+
+Si el pie no resuelve la ubicación, se conserva la lectura de página completa. Los PDF con texto digital no requieren detección automática de orientación; esta sigue activa para imágenes y documentos escaneados. Las pruebas cubren el recorte, el retorno a la página completa y la orientación de imágenes.
+
 Se revisaron los 166 PDF y la imagen JPG del ZIP proporcionado, con lectura digital y OCR local mediante Poppler y Tesseract en español. Los documentos de pacientes y su texto no se incorporan al repositorio. El informe cuenta campos detectados; no certifica la exactitud de cada dato clínico.
 
 ## Estructuras

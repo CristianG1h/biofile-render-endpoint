@@ -2,16 +2,14 @@
 // Patient values and clinical text are never written to the report.
 import readline from 'node:readline';
 import { validateFile, extractFile } from '../src/nacionales/file-service.js';
-import { parseDocument } from '../src/nacionales/parser.js';
+import { parseDocument, documentOcrPlan } from '../src/nacionales/parser.js';
 const report={documents:0,templates:{},cities:{},methods:{},missingCity:[],missingIdentity:[],failures:[],warnings:0};
 for await (const line of readline.createInterface({input:process.stdin,crlfDelay:Infinity})) {
   if (!line.trim()) continue;
   const index=++report.documents;
   try {
     const file=JSON.parse(line),bytes=Buffer.from(file.data,'base64');
-    const result=await extractFile(bytes,validateFile(file.name,file.mime,bytes),text=>{
-      const p=parseDocument(text);return !p.patient.numeroDocumento||!p.patient.primerNombre||!p.cityExam;
-    });
+    const result=await extractFile(bytes,validateFile(file.name,file.mime,bytes),documentOcrPlan);
     const digital=result.digitalText?parseDocument(result.digitalText):null;
     const parsed=digital?.patient.numeroDocumento&&digital?.patient.primerNombre?digital:parseDocument(result.text);
     if(!parsed.cityExam) parsed.cityExam=parseDocument(result.text).cityExam;

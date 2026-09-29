@@ -24,21 +24,36 @@ export async function extractFile(bytes, metadata, needsOcr, run = exec) {
   };
   try {
     await fs.writeFile(input, bytes, { mode: 0o600 });
-    let text = '', digitalText = '', method = 'pdf-text', pages = 1;
+    let text = '', digitalText = '', method = 'pdf-text', pages = 1, pageSize = null;
     const warnings = [];
     if (metadata.mime === 'application/pdf') {
       stage = 'inspeccionar el PDF';
       const info = await run(process.env.PDFINFO_BIN || 'pdfinfo', [input], options);
       pages = Number(info.stdout.match(/Pages:\s*(\d+)/)?.[1] || 0);
+      const dimensions=info.stdout.match(/Page size:\s*([\d.]+)\s+x\s+([\d.]+)/);
+      if (dimensions && !Number(info.stdout.match(/Page rot:\s*(\d+)/)?.[1]||0)) pageSize=dimensions.slice(1).map(Number);
       if (!pages || pages > Number(process.env.NACIONALES_MAX_PAGES || 10)) throw new Error('El PDF supera el límite de páginas o no se puede leer.');
       stage = 'leer el texto del PDF';
       text = (await run(process.env.PDFTOTEXT_BIN || 'pdftotext', ['-layout','-enc','UTF-8', input, '-'], options)).stdout;
       digitalText = text;
     }
-    if (!text.trim() || needsOcr(text)) {
+    const request=text.trim()?needsOcr(text):true;
+    if (!text.trim() || request) {
       method = text.trim() ? 'pdf-text+ocr' : 'ocr';
       let ocr = '';
       try {
+        if (request.footerOnly && pages===1 && pageSize?.every(n=>n>0)) {
+          // Crop during rendering, before PNG encoding and recognition. The
+          // 3300px scale preserves the tiny address without OCR of the whole page.
+          const height=Math.floor(3300*pageSize[1]/Math.max(...pageSize));
+          const top=Math.floor(height*0.8),prefix=path.join(dir,'footer');
+          stage='convertir el pie de página para OCR';
+          await run(process.env.PDFTOPPM_BIN||'pdftoppm',['-f','1','-l','1','-singlefile','-scale-to','3300','-y',String(top),'-H',String(height-top),'-png',input,prefix],options);
+          stage='leer la sede en el pie de página';
+          ocr=(await run(process.env.TESSERACT_BIN||'tesseract',[prefix+'.png','stdout','-l','spa','--psm','11'],options)).stdout;
+          await fs.rm(prefix+'.png',{force:true});
+          if (ocr.trim() && !needsOcr(digitalText+'\n'+ocr)) return {text:ocr,digitalText,method,warnings};
+        }
         // Render and release one page at a time to bound memory and disk use.
         for (let page = 1; page <= pages; page++) {
           let image = input;
@@ -49,10 +64,11 @@ export async function extractFile(bytes, metadata, needsOcr, run = exec) {
             image = prefix + '.png';
           }
           stage = `leer por OCR la página ${page}`;
-          ocr += (await run(process.env.TESSERACT_BIN || 'tesseract', [image,'stdout','-l','spa','--psm','1','-c','min_orientation_margin=0'], options)).stdout + '\n';
+          const segmentation=digitalText.trim()?['--psm','3']:['--psm','1','-c','min_orientation_margin=0'];
+          ocr += (await run(process.env.TESSERACT_BIN || 'tesseract', [image,'stdout','-l','spa',...segmentation], options)).stdout + '\n';
           // Small image footers can disappear at the normal resolution. Only pay
           // for a larger sparse-text pass when required fields remain unresolved.
-          if (digitalText.trim() && metadata.mime === 'application/pdf' && needsOcr(digitalText+'\n'+ocr)) {
+          if (!request.footerOnly && digitalText.trim() && metadata.mime === 'application/pdf' && needsOcr(digitalText+'\n'+ocr)) {
             stage = `ampliar la página ${page} para leer texto pequeño`;
             await run(process.env.PDFTOPPM_BIN || 'pdftoppm', ['-f',String(page),'-l',String(page),'-singlefile','-r','225','-scale-to','3300','-png',input,path.join(dir,'page')], options);
             stage = `leer texto pequeño por OCR en la página ${page}`;

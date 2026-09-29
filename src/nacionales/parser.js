@@ -283,3 +283,11 @@ export function parseDocument(text) {
   for(const [k,v] of Object.entries(patient))fieldConfidence[k]={level:!v?'missing':autoFilledFields.some(x=>x.campo===k)?'review':'extracted',reason:!v?'No identificado en el documento':autoFilledFields.some(x=>x.campo===k)?'Valor calculado; confirmar en vista previa':'Valor extraído del concepto'};
   return {templateDetected,confidence:'REQUIERE_REVISION',patient,employment,cityExam,examDate,company:{alias:clean(f.empresa),acuerdoBiofile:'',empresaMisionBiofile:''},exams:examList(text),warnings,fieldConfidence,autoFilledFields};
 }
+
+// Compact PDFs carry identity in text and the location in a small image footer.
+export function documentOcrPlan(text) {
+  const parsed=parseDocument(text),p=parsed.patient;
+  if (!p.numeroDocumento || !p.primerNombre) return true;
+  if (parsed.cityExam) return false;
+  return parsed.templateDetected==='compact-aptitude' ? {footerOnly:true} : true;
+}

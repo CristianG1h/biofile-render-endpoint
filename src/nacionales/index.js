@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { validateFile, extractFile } from './file-service.js';
-import { parseDocument, repairStoredConcept } from './parser.js';
+import { parseDocument, repairStoredConcept, documentOcrPlan } from './parser.js';
 import { applyDefaults } from './defaults.js';
 import { validateConcept } from './validators.js';
 import { catalog, automaticCityMap, mapProducts, mappingKey, validateProductMapping } from './product-mapper.js';
@@ -111,7 +111,7 @@ export function createNationalApi({ service, ready, send, companies, screenshots
             send(req,res,200,{ ok:true,concept:upgraded,duplicate:true,duplicateWarning:'Este archivo ya fue analizado. Se recuperó la vista previa existente con las reglas actuales de Nacionales.' });
             return true;
           }
-          const extracted = await extractFile(bytes, metadata, text => { const parsed=parseDocument(text),p=parsed.patient; return !p.numeroDocumento || !p.primerNombre || !parsed.cityExam; });
+          const extracted = await extractFile(bytes, metadata, documentOcrPlan);
           const digital=extracted.digitalText ? parseDocument(extracted.digitalText) : null;
           const parsed=digital?.patient.numeroDocumento && digital?.patient.primerNombre ? digital : parseDocument(extracted.text);
           if (!parsed.cityExam && extracted.text!==extracted.digitalText) { const ocr=parseDocument(extracted.text);parsed.cityExam=ocr.cityExam;parsed.warnings.push(...ocr.warnings.filter(w=>/Ciudad identificada/.test(w))); }
