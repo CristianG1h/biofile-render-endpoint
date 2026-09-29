@@ -10,6 +10,7 @@ import { catalog, automaticCityMap, mapProducts, mappingKey, validateProductMapp
 import { processNational } from './processing-service.js';
 import { norm, canonicalCity } from './normalize.js';
 export const canRead = (actor, item) => actor.id === item.usuarioId || actor.rol === 'superadmin';
+export const NATIONAL_RESET_MARKER_ID = 'national-reset-2026-09-29-v1';
 export function duplicateBarrier(previous, actor, confirmed) {
   const uncertain = previous.find(j => j.estado !== 'completado' && (j.guardadoIntentado || j.numeroOrden));
   const completed = previous.filter(j => j.estado === 'completado').at(-1);
@@ -56,8 +57,49 @@ async function readBody(req, max = 65536) {
 }
 export function createNationalApi({ service, ready, send, companies, screenshotsRoot }) {
   let analyzing = false;
+  let resetPromise = null;
   const store = service.store;
   const records = kind => [...store.items.values()].filter(r => r.kind === kind);
+  const conceptPermissions = (actor, concept) => {
+    const owns = actor.id === concept.usuarioId;
+    const superadmin = actor.rol === 'superadmin';
+    return {
+      canEdit: !concept.deletedAt && (owns || superadmin),
+      canSoftDelete: !concept.deletedAt && (owns || superadmin),
+      canRestore: Boolean(concept.deletedAt) && (owns || superadmin),
+      canPurge: Boolean(concept.deletedAt) && superadmin
+    };
+  };
+  const purgeConcept = async concept => {
+    const related = [...service.jobs.values()].filter(j => j.kind === 'national-job' && j.conceptId === concept.id);
+    for (const job of related) {
+      await store.delete(job.id);
+      service.jobs.delete(job.id);
+    }
+    await store.delete(concept.id);
+    service.jobs.delete(concept.id);
+  };
+  const resetNationalDataOnce = async () => {
+    if (store.items.has(NATIONAL_RESET_MARKER_ID)) return false;
+    if (resetPromise) return resetPromise;
+    resetPromise = (async () => {
+      const targets = [...store.items.values()].filter(item => item.kind === 'national-concept' || item.kind === 'national-job');
+      for (const item of targets) {
+        await store.delete(item.id);
+        service.jobs.delete(item.id);
+      }
+      await store.save({
+        id: NATIONAL_RESET_MARKER_ID,
+        kind: 'national-reset-marker',
+        version: 1,
+        creadoEn: new Date().toISOString(),
+        descripcion: 'Reinicio solicitado de todos los registros históricos de Nacionales.'
+      });
+      return true;
+    })();
+    try { return await resetPromise; }
+    finally { resetPromise = null; }
+  };
   const configuration = () => ({ products: records('product-map').map(r => r.value), companies: records('company-map').map(r => ({ ...r.value, id: r.id })) });
   const publicJob = j => { const { captura, concept, ...safe } = j; return { ...safe, hasScreenshot: Boolean(captura), patient: concept?.patient, autoFilledFields: concept?.autoFilledFields }; };
   const prepare = concept => {
@@ -128,15 +170,32 @@ export function createNationalApi({ service, ready, send, companies, screenshots
       const conceptMatch = /^concepts\/([0-9a-f-]+)$/.exec(route);
       if (conceptMatch && req.method === 'DELETE') {
         const source = store.items.get(conceptMatch[1]);
-        if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        if (!source || source.kind !== 'national-concept' || (source.usuarioId !== actor.id && actor.rol !== 'superadmin')) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
         const active = [...service.jobs.values()].find(j => j.kind === 'national-job' && j.conceptId === source.id && ['en_cola','procesando'].includes(j.estado));
         if (active) throw Object.assign(new Error('No se puede eliminar mientras el concepto está en cola o enviándose a BIOFILE.'),{statusCode:409});
-        await store.save({...source,deletedAt:new Date().toISOString(),deletedBy:actor.id});
+        await store.save({...source,deletedAt:new Date().toISOString(),deletedBy:actor.id,deletedByName:actor.usuario || ''});
         send(req,res,200,{ok:true,id:source.id});
         return true;
       }
       const restoreMatch=/^concepts\/([0-9a-f-]+)\/restore$/.exec(route);
-      if (restoreMatch && req.method==='POST') { const source=store.items.get(restoreMatch[1]);if(!source || source.kind!=='national-concept' || source.usuarioId!==actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404}); const restored={...source};delete restored.deletedAt;delete restored.deletedBy;await store.save(restored);send(req,res,200,{ok:true,concept:restored});return true; }
+      if (restoreMatch && req.method==='POST') {
+        const source=store.items.get(restoreMatch[1]);
+        if(!source || source.kind!=='national-concept' || (source.usuarioId!==actor.id && actor.rol!=='superadmin')) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        const restored={...source};delete restored.deletedAt;delete restored.deletedBy;delete restored.deletedByName;
+        await store.save(restored);
+        send(req,res,200,{ok:true,concept:{...restored,permissions:conceptPermissions(actor,restored)}});
+        return true;
+      }
+      const purgeMatch=/^concepts\/([0-9a-f-]+)\/permanent$/.exec(route);
+      if (purgeMatch && req.method==='DELETE') {
+        if (actor.rol !== 'superadmin') throw Object.assign(new Error('Solo Super Admin puede eliminar permanentemente.'),{statusCode:403});
+        const source=store.items.get(purgeMatch[1]);
+        if(!source || source.kind!=='national-concept') throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
+        if(!source.deletedAt) throw Object.assign(new Error('Primero mueva el concepto a Eliminados antes de borrarlo permanentemente.'),{statusCode:409});
+        await purgeConcept(source);
+        send(req,res,200,{ok:true,id:source.id,permanent:true});
+        return true;
+      }
       if (conceptMatch && req.method === 'PATCH') {
         const source = store.items.get(conceptMatch[1]);
         if (!source || source.kind !== 'national-concept' || source.usuarioId !== actor.id) throw Object.assign(new Error('Concepto no encontrado.'),{statusCode:404});
@@ -189,13 +248,27 @@ export function createNationalApi({ service, ready, send, companies, screenshots
         if(!match[2] && req.method==='GET') {send(req,res,200,{ok:true,job:publicJob(job)});return true;}
       }
       if(route==='history' && req.method==='GET') {
-        const own = records('national-concept').filter(c=>c.usuarioId===actor.id).slice(-200);
-        const concepts = [];
-        for (const original of own) {
-          const upgraded = refreshConcept(original);
-          concepts.push(upgraded);
+        await resetNationalDataOnce();
+        const allConcepts = records('national-concept');
+        const allJobs = [...service.jobs.values()].filter(j=>j.kind==='national-job');
+        const latestByConcept = new Map();
+        for (const job of allJobs) {
+          const previous=latestByConcept.get(job.conceptId);
+          if(!previous || String(job.creadoEn||'') >= String(previous.creadoEn||'')) latestByConcept.set(job.conceptId,job);
         }
-        send(req,res,200,{ok:true,concepts,jobs:[...service.jobs.values()].filter(j=>j.kind==='national-job' && canRead(actor,j)).slice(-200).map(publicJob)});return true;
+        const shared = allConcepts.filter(concept => {
+          if (concept.usuarioId === actor.id) return true;
+          if (concept.deletedAt) return true;
+          return latestByConcept.get(concept.id)?.estado === 'completado';
+        }).slice(-500);
+        const concepts = shared.map(original => {
+          const upgraded=refreshConcept(original);
+          return {...upgraded,permissions:conceptPermissions(actor,upgraded)};
+        });
+        const visibleIds=new Set(shared.map(c=>c.id));
+        const jobs=allJobs.filter(j=>visibleIds.has(j.conceptId)).slice(-500).map(publicJob);
+        send(req,res,200,{ok:true,concepts,jobs,sharedSections:['ingresado','eliminado'],resetVersion:1});
+        return true;
       }
       throw Object.assign(new Error('Ruta Nacionales no encontrada.'),{statusCode:404});
     } catch(error) {send(req,res,error.statusCode || 400,{ok:false,error:String(error.message).slice(0,1500)});return true;}
