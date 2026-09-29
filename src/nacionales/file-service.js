@@ -12,39 +12,68 @@ export function validateFile(name, mime, bytes) {
   if (!bytes.length || bytes.length > Number(process.env.NACIONALES_MAX_FILE_BYTES || 10485760)) throw new Error('Archivo vacío o superior al límite de 10 MB.');
   return { sourceFile: path.basename(name).replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0,120), fileHash: crypto.createHash('sha256').update(bytes).digest('hex'), mime: detected };
 }
-export async function extractFile(bytes, metadata, needsOcr) {
+export async function extractFile(bytes, metadata, needsOcr, run = exec) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'biofile-document-'));
   const input = path.join(dir, metadata.mime === 'application/pdf' ? 'input.pdf' : metadata.mime === 'image/png' ? 'input.png' : 'input.jpg');
   const options = { timeout: 45000, maxBuffer: 4 * 1024 * 1024, windowsHide: true };
+  let stage = 'abrir archivo';
+  const failure = error => {
+    if (error.code === 'ENOENT') return `No está disponible el motor para ${stage}. Revise Poppler y Tesseract en el servidor.`;
+    if (error.killed) return `Se agotó el tiempo al ${stage}.`;
+    return `No fue posible ${stage}. Revise que el documento no esté dañado ni protegido.`;
+  };
   try {
     await fs.writeFile(input, bytes, { mode: 0o600 });
-    let text = '', digitalText = '', method = 'pdf-text';
+    let text = '', digitalText = '', method = 'pdf-text', pages = 1;
+    const warnings = [];
     if (metadata.mime === 'application/pdf') {
-      const info = await exec(process.env.PDFINFO_BIN || 'pdfinfo', [input], options);
-      const pages = Number(info.stdout.match(/Pages:\s*(\d+)/)?.[1] || 0);
+      stage = 'inspeccionar el PDF';
+      const info = await run(process.env.PDFINFO_BIN || 'pdfinfo', [input], options);
+      pages = Number(info.stdout.match(/Pages:\s*(\d+)/)?.[1] || 0);
       if (!pages || pages > Number(process.env.NACIONALES_MAX_PAGES || 10)) throw new Error('El PDF supera el límite de páginas o no se puede leer.');
-      text = (await exec(process.env.PDFTOTEXT_BIN || 'pdftotext', ['-layout','-enc','UTF-8', input, '-'], options)).stdout;
+      stage = 'leer el texto del PDF';
+      text = (await run(process.env.PDFTOTEXT_BIN || 'pdftotext', ['-layout','-enc','UTF-8', input, '-'], options)).stdout;
       digitalText = text;
     }
     if (!text.trim() || needsOcr(text)) {
       method = text.trim() ? 'pdf-text+ocr' : 'ocr';
-      let images = [input];
-      if (metadata.mime === 'application/pdf') {
-        await exec(process.env.PDFTOPPM_BIN || 'pdftoppm', ['-r','150','-scale-to','2200','-png',input,path.join(dir,'page')], options);
-        images = (await fs.readdir(dir)).filter(n => /^page-.*\.png$/.test(n)).sort().map(n => path.join(dir,n));
-      }
       let ocr = '';
-      for (const image of images) ocr += (await exec(process.env.TESSERACT_BIN || 'tesseract', [image,'stdout','-l','spa','--psm','3'], options)).stdout + '\n';
+      try {
+        // Render and release one page at a time to bound memory and disk use.
+        for (let page = 1; page <= pages; page++) {
+          let image = input;
+          if (metadata.mime === 'application/pdf') {
+            stage = `convertir la página ${page} para OCR`;
+            const prefix = path.join(dir, 'page');
+            await run(process.env.PDFTOPPM_BIN || 'pdftoppm', ['-f',String(page),'-l',String(page),'-singlefile','-r','150','-scale-to','2200','-png',input,prefix], options);
+            image = prefix + '.png';
+          }
+          stage = `leer por OCR la página ${page}`;
+          ocr += (await run(process.env.TESSERACT_BIN || 'tesseract', [image,'stdout','-l','spa','--psm','1','-c','min_orientation_margin=0'], options)).stdout + '\n';
+          // Small image footers can disappear at the normal resolution. Only pay
+          // for a larger sparse-text pass when required fields remain unresolved.
+          if (digitalText.trim() && metadata.mime === 'application/pdf' && needsOcr(digitalText+'\n'+ocr)) {
+            stage = `ampliar la página ${page} para leer texto pequeño`;
+            await run(process.env.PDFTOPPM_BIN || 'pdftoppm', ['-f',String(page),'-l',String(page),'-singlefile','-r','225','-scale-to','3300','-png',input,path.join(dir,'page')], options);
+            stage = `leer texto pequeño por OCR en la página ${page}`;
+            ocr += (await run(process.env.TESSERACT_BIN || 'tesseract', [image,'stdout','-l','spa','--psm','11'], options)).stdout + '\n';
+          }
+          if (image !== input) await fs.rm(image, { force:true });
+        }
+        if (!ocr.trim()) throw new Error('OCR vacío');
+      } catch (error) {
+        if (!digitalText.trim()) throw new Error(failure(error));
+        warnings.push(failure(error) + ' Se conservó el texto digital. Confirme la ciudad y los datos pendientes antes de enviar.');
+        method = 'pdf-text-ocr-incomplete';
+      }
       // Do not combine two competing identities. Parser chooses a complete source.
       if (ocr.trim()) text = ocr;
     }
     if (!text.trim()) throw new Error('No se pudo extraer texto legible.');
-    return { text, digitalText, method };
+    return { text, digitalText, method, warnings };
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('Falta instalar Poppler o Tesseract en el servidor. Revise el despliegue Docker.');
-    if (error.killed) throw new Error('La lectura del archivo superó el tiempo permitido.');
     // Child-process errors can include extracted sensitive text: never propagate stderr.
-    if (error.cmd) throw new Error('No fue posible leer el documento con el motor de extracción.');
+    if (error.cmd || error.code === 'ENOENT' || error.killed) throw new Error(failure(error));
     throw error;
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 }

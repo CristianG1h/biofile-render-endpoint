@@ -25,7 +25,7 @@ jobs:
       - name: Ejecutar pruebas de seguridad
         run: npm test
       - name: Instalar motores PDF y OCR
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-spa
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-spa tesseract-ocr-osd
       - name: Verificar extracción digital y OCR
         run: node scripts/test-file-engines.mjs
       - name: Instalar Chromium de pruebas

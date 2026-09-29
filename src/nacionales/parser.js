@@ -131,7 +131,7 @@ export function examList(text) {
   const source=section||n.split(/RECOMENDACIONES|CONSENTIMIENTO|FIRMA/)[0];
   for(const [name,rx] of [
     ['AUDIOMETRÍA',/AUDIOMETR/],['VISIOMETRÍA',/VISIOMETR/],['OPTOMETRÍA',/OPTOMETR/],
-    ['EXAMEN MÉDICO OCUPACIONAL',/EXAMEN (?:MEDICO|FISICO)|VALORACION MEDICA OCUPACIONAL|EVALUACION MEDICA OCUPACIONAL/],
+    ['EXAMEN MÉDICO OCUPACIONAL',/EXAMEN (?:MEDICO|FISICO)|VALORACION MEDICA OCUPACIONAL|EVALUACION MEDICA OCUPACIONAL|\bEX OSTEOMUSCULAR\b/],
     ['ESPIROMETRÍA',/ESPIROMETR/],['ELECTROCARDIOGRAMA',/ELECTROCARDIOGRAMA/]
   ]) if(rx.test(source)) exams.push(name);
   if(!exams.includes('EXAMEN MÉDICO OCUPACIONAL') && /(?:CERTIFICADO|CONCEPTO|INFORME) MEDICO.*(?:OCUPACIONAL|APTITUD)/.test(n)) exams.push('EXAMEN MÉDICO OCUPACIONAL');
@@ -147,6 +147,23 @@ export function parseDocument(text) {
   let identity=fold(head).match(/(?:IDENTIFICACION|IDENTIDAD|DOCUMENTO|\bID)\s*:?\s*(CC|CE|TI|PT|PA|PEP|PPT|RC)\s*[-.:]?\s*([\d.]{5,16})/);
   if(!identity) identity=fold(head).match(/IDENTIFICACION\s*:\s*(CC|CE|TI|PT|PA|PEP|PPT|RC)\s+NUMERO\s*:\s*([\d.]{5,16})/);
   if(identity){patient.tipoDocumento=identity[1];patient.numeroDocumento=identity[2].replace(/\D/g,'');}
+
+  if(templateDetected==='diagnostic-aids'){
+    // Scanned tables lose column spacing: use the next printed label as a boundary.
+    f.fullName=first(head,/Nombre:\s*(.*?)\s+Identificaci[óo]n\s*:/i);
+    setName(patient,f.fullName,true);
+    f.genero=first(head,/Sexo:\s*(MASCULINO|FEMENINO|M|F)\b/i);
+    f.birth=first(head,/F\.?\s*Nacimiento:\s*([\d/.-]+)/i);
+    f.cargo=first(head,/Cargo:\s*(.*?)\s+Secci[óo]n\s*:/i);
+    f.direccion=first(head,/Direcci[óo]n Actual:\s*(.*?)\s+Tel[ée]fono\s*:/i);
+    f.celular=first(head,/Tel[ée]fono:\s*(\d{7,15})/i);
+    f.municipioResidencia=first(head,/Ciudad Residencia:\s*([^\n]+)/i);
+    f.estadoCivil=first(head,/Estado Civil:\s*(.*?)\s+EPS\s*:/i);
+    f.eps=first(head,/EPS:\s*(.*?)\s+Tipo de Usuario\s*:/i);
+    f.cityExam=first(head,/\bCIUDAD:\s*([^\n]+)/i);
+    f.examType=first(head,/TIPO DE EXAMEN:\s*(.*?)\s+FECHA HORA EXAMEN/i);
+    examDate=date(first(head,/FECHA HORA EXAMEN:\s*([\d/.-]+)/i))||examDate;
+  }
 
   if(templateDetected==='worker-table'){
     const ix=lines.findIndex(l=>/Apellidos y Nombres/i.test(l)),block=ix>=0?lines.slice(ix+1,ix+7):[];
@@ -254,8 +271,8 @@ export function parseDocument(text) {
 
   const employment={cargo:clean(f.cargo),eps:clean(f.eps),afp:clean(f.afp),arl:clean(f.arl),tipoEvaluacion:evaluation(f.examType||head.slice(0,2500))};
   let cityExam=canonicalCity(f.cityExam);if(!cityExam&&['clinical-certificate','patient-admission','aptitude-sections'].includes(templateDetected))cityExam=canonicalCity(patient.municipioResidencia);
-  const explicitCity=text.match(/(?:CIUDAD (?:DEL EXAMEN|DE ATENCION|DE REALIZACION)|LUGAR DE (?:ATENCION|REALIZACION)|REALIZADO EN)\s*:\s*([^\n]+)/i)?.[1];
-  if(explicitCity) cityExam=canonicalCity(explicitCity);
+  const explicitCities=text.matchAll(/(?:CIUDAD (?:DEL EXAMEN|DE ATENCI[ÓO]N|DE REALIZACI[ÓO]N)|LUGAR DE (?:ATENCI[ÓO]N|REALIZACI[ÓO]N)|REALIZADO EN)[ \t]*:[ \t]*([^\r\n]*)/gi);
+  for(const match of explicitCities){const candidate=canonicalCity(match[1]);if(candidate){cityExam=candidate;break;}}
   if(!cityExam) cityExam=inferSupportedExamCity(text);
   // The user confirmed Pereira for the supplied location, identified by address,
   // never by the patient's identity or file name. Useful when the footer needs OCR.

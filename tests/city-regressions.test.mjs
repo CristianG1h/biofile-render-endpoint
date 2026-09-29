@@ -24,3 +24,29 @@ test('verified location address identifies Pereira without a patient or filename
   assert.equal(c.cityExam,'PEREIRA');
   assert.equal(parseDocument('Clínica Risaralda').cityExam,'');
 });
+
+test('scanned diagnostic table keeps exam city separate from residence and labels out of identity',()=>{
+  const c=parseDocument(`CONCEPTO DE APTITUD
+TIPO DE EXAMEN: PERIODICO FECHA HORA EXAMEN: 27/07/2026 08:17:43 AM CIUDAD: SOPO
+IDENTIFICACION DEL ASPIRANTE O TRABAJADOR
+Nombre: PEREZ GOMEZ JUAN CARLOS Identificación: CC 123456789 Edad: 37 Sexo: M
+Cargo: ASESOR COMERCIAL Sección: OPERATIVA F.Nacimiento:01/03/1989
+Dirección Actual: CALLE PRUEBA Teléfono: 3001234567 Ciudad Residencia: TOCANCIPA
+Estado Civil: Soltero (a) EPS:SANITAS Tipo de Usuario: SUBSIDIADO
+AYUDAS DIAGNOSTICAS
+EX.OSTEOMUSCULAR 27/07/2026 SIN ALTERACION
+OPTOMETRIA 27/07/2026
+AUDIOMETRIA 27/07/2026
+RECOMENDACIONES GENERALES`);
+  assert.equal(c.templateDetected,'diagnostic-aids');assert.equal(c.cityExam,'SOPÓ');
+  assert.equal(c.patient.primerNombre,'JUAN');assert.equal(c.patient.segundoNombre,'CARLOS');
+  assert.equal(c.patient.primerApellido,'PEREZ');assert.equal(c.patient.numeroDocumento,'123456789');
+  assert.equal(c.patient.municipioResidencia,'TOCANCIPA');assert.equal(c.patient.fechaNacimiento,'1989-03-01');
+  assert.equal(c.employment.cargo,'ASESOR COMERCIAL');assert.equal(c.examDate,'2026-07-27');
+  assert.deepEqual(c.exams,['AUDIOMETRÍA','OPTOMETRÍA','EXAMEN MÉDICO OCUPACIONAL']);
+});
+
+test('blank clinical city cannot become the following section title',()=>{
+  const c=parseDocument('CONCEPTO MEDICO OCUPACIONAL CON ENFASIS\nApellido: PRUEBA\nCiudad: .:: No Aplica ::.\nIPS que Atendio: , Ciudad de Atención:\nAYUDA DIAGNOSTICA\nExamenes Realizados\nAUDIOMETRIA');
+  assert.equal(c.cityExam,'');
+});

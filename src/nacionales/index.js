@@ -114,9 +114,11 @@ export function createNationalApi({ service, ready, send, companies, screenshots
           const extracted = await extractFile(bytes, metadata, text => { const parsed=parseDocument(text),p=parsed.patient; return !p.numeroDocumento || !p.primerNombre || !parsed.cityExam; });
           const digital=extracted.digitalText ? parseDocument(extracted.digitalText) : null;
           const parsed=digital?.patient.numeroDocumento && digital?.patient.primerNombre ? digital : parseDocument(extracted.text);
-          if (!parsed.cityExam && extracted.method==='pdf-text+ocr') { const ocr=parseDocument(extracted.text);parsed.cityExam=ocr.cityExam;parsed.warnings.push(...ocr.warnings.filter(w=>/Ciudad identificada/.test(w))); }
+          if (!parsed.cityExam && extracted.text!==extracted.digitalText) { const ocr=parseDocument(extracted.text);parsed.cityExam=ocr.cityExam;parsed.warnings.push(...ocr.warnings.filter(w=>/Ciudad identificada/.test(w))); }
+          if (parsed.cityExam) parsed.warnings=parsed.warnings.filter(w=>w!=='Confirme la ciudad donde se realizó el examen.');
+          parsed.warnings.push(...(extracted.warnings||[]));
           const c = { ...applyDefaults(parsed), ...metadata, extractionMethod:extracted.method, id:crypto.randomUUID(),kind:'national-concept',usuarioId:actor.id,usuarioNombre:actor.usuario,creadoEn:new Date().toISOString(),reviewed:false,companyAgreement:'' };
-          if(existing){const recoveredCity=c.cityExam;Object.assign(c,existing,{cityExam:recoveredCity,extractionMethod:extracted.method,reviewed:false});for(const key of ['municipioResidencia','ciudadNacimiento'])if(!canonicalCity(c.patient[key]))c.patient[key]=recoveredCity;}
+          if(existing){const recoveredCity=c.cityExam;Object.assign(c,existing,{cityExam:recoveredCity,extractionMethod:extracted.method,reviewed:false,warnings:[...new Set([...(existing.warnings||[]).filter(w=>!recoveredCity||w!=='Confirme la ciudad donde se realizó el examen.'),...parsed.warnings])]});for(const key of ['municipioResidencia','ciudadNacimiento'])if(!canonicalCity(c.patient[key]))c.patient[key]=recoveredCity;}
           c.estado='REQUIERE_REVISION'; c.validationErrors=prepare(c).errors;
           if (duplicates.length) c.warnings.push('Este documento fue cargado anteriormente por otro usuario.');
           await store.save(c); send(req,res,200,{ ok:true,concept:c });

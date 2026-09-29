@@ -41,6 +41,7 @@ try {
     const root=path.resolve(process.env.PANEL_DIR);
     const concepts=['pending','done','partial','deleted'].map(id=>({id,sourceFile:id+'.pdf',estado:'LISTO',patient:{numeroDocumento:'123456',primerNombre:'PRUEBA',primerApellido:'SINTETICA'},employment:{},exams:[],warnings:[],autoFilledFields:[],cityExam:'PEREIRA',...(id==='deleted'?{deletedAt:'2026-01-01'}:{})}));
     const jobs=[{id:'job-done',conceptId:'done',estado:'completado',numeroOrden:'TEST-1',guardadoIntentado:true,creadoEn:'2026-01-01',progreso:100},{id:'job-partial',conceptId:'partial',estado:'parcial',numeroOrden:'TEST-2',guardadoIntentado:true,creadoEn:'2026-01-01',progreso:91}];
+    let analyzeAttempts=0;
     await page.route('**/*',async route=>{
       const url=new URL(route.request().url());
       if(url.hostname==='panel.test'){
@@ -49,6 +50,10 @@ try {
         try{return route.fulfill({body:await fs.readFile(filename),contentType:filename.endsWith('.css')?'text/css':filename.endsWith('.js')?'application/javascript':'text/html'});}catch{return route.fulfill({status:404,body:''});}
       }
       if(url.pathname.startsWith('/api/')){
+        if(url.pathname.endsWith('/analyze')){
+          analyzeAttempts++;
+          return route.fulfill({status:analyzeAttempts===1?400:200,contentType:'application/json',body:JSON.stringify(analyzeAttempts===1?{ok:false,error:'No fue posible leer por OCR la página 1.'}:{ok:true,concept:concepts[0]})});
+        }
         let data={ok:true,registros:[],jobs:[],concepts:[],companies:[],products:[],catalog:[],usuarios:[]};
         if(url.pathname.endsWith('/config'))data.canConfigure=true;
         if(url.pathname.endsWith('/history'))data={...data,concepts,jobs};
@@ -66,6 +71,16 @@ try {
     await page.locator('[data-section="error"]').click();assert.equal(await page.locator('#natRows tr').count(),1);
     await page.locator('[data-section="eliminado"]').click();assert.equal(await page.locator('#natRows [data-action="restore"]').count(),1);
     await page.locator('[data-section="pendiente"]').click();
+    const upload={name:'prueba.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-synthetic')};
+    await page.locator('#natFiles').setInputFiles(upload);
+    await page.waitForFunction(()=>document.querySelector('#natMessage').textContent.includes('0 archivos analizados. 1 errores'));
+    assert.match(await page.locator('#natUploadErrors').textContent(),/prueba.pdf: No fue posible leer por OCR la página 1/);
+    assert.equal(await page.locator('#natFiles').inputValue(),'');
+    await page.locator('[data-section="ingresado"]').click();
+    await page.locator('#natFiles').setInputFiles(upload);
+    await page.waitForFunction(()=>document.querySelector('#natMessage').textContent.includes('1 archivos analizados. 0 errores'));
+    assert.equal(await page.locator('#natUploadErrors').isVisible(),false);
+    assert.equal(await page.locator('[data-section="pendiente"]').getAttribute('aria-pressed'),'true');
     await page.locator('#natConfigToggle').click();await page.locator('#natConfig:not([hidden])').waitFor();
     await page.screenshot({path:process.env.TEMP+'/biofile-nacionales-desktop.png'});
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:process.env.TEMP+'/biofile-nacionales-mobile.png'});

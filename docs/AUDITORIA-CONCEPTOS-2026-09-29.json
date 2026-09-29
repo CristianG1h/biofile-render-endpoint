@@ -1,0 +1,73 @@
+{
+  "documents": 167,
+  "templates": {
+    "physical-aptitude": 1,
+    "diagnostic-aids": 1,
+    "worker-table": 136,
+    "patient-admission": 2,
+    "clinical-certificate": 3,
+    "osteomuscular-sections": 15,
+    "attention-sections": 1,
+    "aptitude-sections": 1,
+    "labor-certificate": 1,
+    "compact-aptitude": 6
+  },
+  "cities": {
+    "SANTA MARTA": 1,
+    "SOPÓ": 1,
+    "BOGOTÁ": 75,
+    "MEDELLÍN": 30,
+    "MONTERÍA": 2,
+    "MANIZALES": 1,
+    "CARTAGENA": 6,
+    "VILLAVICENCIO": 3,
+    "VALLEDUPAR": 2,
+    "CALI": 8,
+    "POR CONFIRMAR": 7,
+    "BARRANQUILLA": 21,
+    "CÚCUTA": 1,
+    "TUNJA": 1,
+    "BUCARAMANGA": 1,
+    "CARTAGO": 1,
+    "PEREIRA": 6
+  },
+  "methods": {
+    "pdf-text": 153,
+    "ocr": 1,
+    "pdf-text+ocr": 13
+  },
+  "missingCity": [
+    {
+      "index": 92,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 110,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 112,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 115,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 118,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 134,
+      "template": "osteomuscular-sections"
+    },
+    {
+      "index": 136,
+      "template": "osteomuscular-sections"
+    }
+  ],
+  "missingIdentity": [],
+  "failures": [],
+  "warnings": 0,
+  "notice": "Cobertura de extracción, no certificación de exactitud clínica. Sin datos de pacientes."
+}
