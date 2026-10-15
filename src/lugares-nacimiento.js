@@ -118,7 +118,7 @@ export function capitalPais(pais) {
 
 export function variantesPais(pais) {
   const n = normalizar(pais);
-  const base = ALIASES_PAIS[n] || [pais];
+  const base = ALIASES_PAIS[n] || Object.values(ALIASES_PAIS).find(aliases => aliases.includes(n)) || [pais];
   return [...new Set([pais, ...base].map(normalizar).filter(Boolean))];
 }
 

@@ -263,6 +263,7 @@ export async function procesarRegistroBiofile({
       fila: registro.row,
       numeroOrden,
       pacienteExistente: Boolean(resultadoLlenado?.pacienteExistente),
+      ajustesNacimiento: resultadoLlenado?.ajustesNacimiento || [],
       imagenesEnviadas: Boolean(subirImagenes),
       duracionSegundos: duracionSegundos(inicio),
       experiencia

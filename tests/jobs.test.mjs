@@ -5,6 +5,21 @@ import { waitForAccountTurn } from '../src/browser.js';
 const actor={id:'a',usuario:'TEST',rol:'user'};
 class MemoryStore {items=new Map();async init(){} async save(j){this.items.set(j.id,structuredClone(j));}}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+test('birthplace adjustment survives completion, failure and restart',async()=>{
+  for(const fail of [false,true]) {
+    const store=new MemoryStore(),service=await new JobService(store).init();
+    const ajustesNacimiento=[{original:'LUGAR AUSENTE (VENEZUELA)',aplicado:'BOGOTÁ (BOGOTÁ D.C., COLOMBIA)',motivo:'Sin coincidencia válida'}];
+    const {job}=await service.enqueue({documento:'123'},actor,async({onProgress})=>{
+      await onProgress({ajustesNacimiento,persist:true,event:'BIRTHPLACE_FALLBACK'});
+      if(fail) throw Error('fallo posterior');
+      return {numeroOrden:'TEST',ajustesNacimiento};
+    });
+    await Promise.all(service.queues.values());
+    const reiniciado=await new JobService(store).init();
+    assert.deepEqual(reiniciado.jobs.get(job.id).ajustesNacimiento,ajustesNacimiento);
+  }
+});
 test('queue is sequential and duplicate submission is atomic',async()=>{
   const service=await new JobService(new MemoryStore()).init();let running=0,max=0;
   const runner=async()=>{running++;max=Math.max(max,running);await sleep(15);running--;return {numeroOrden:'TEST'};};

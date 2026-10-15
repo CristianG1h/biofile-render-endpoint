@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { descargarArchivoEnMemoria } from './drive.js';
 import { asegurarDirectorio, fechaArchivo, normalizar } from './util.js';
-import { capitalDepartamentoColombia, capitalPais, variantesPais, esColombia } from './lugares-nacimiento.js';
+import { separarCiudadNacimiento, claveCiudad, coincideNacimiento, resolverNacimiento } from './nacimiento-selector.js';
 import {
   construirUrlMetodoAutocomplete,
   extraerOpcionesAutocomplete,
@@ -20,94 +20,6 @@ function escapeRegex(s) {
 
 
 /* LUGARES_NACIMIENTO_V5 */
-function separarCiudadNacimiento(valor) {
-  const original = String(valor ?? '').trim().replace(/\s+/g, ' ');
-  if (!original) return { original: '', municipio: '', departamento: '', pais: '', opcionEsperada: '' };
-
-  // Acepta tanto MUNICIPIO (DEPARTAMENTO, PAIS) como CIUDAD (PAIS).
-  const conParentesis = original.match(/^(.+?)\s*\(\s*([^)]+?)\s*\)$/);
-  if (conParentesis) {
-    let municipio = conParentesis[1].trim();
-    const partes = conParentesis[2].split(',').map((x) => x.trim()).filter(Boolean);
-    let departamento = '';
-    let pais = '';
-    if (partes.length >= 2) {
-      pais = partes[partes.length - 1];
-      departamento = partes.slice(0, -1).join(', ');
-    } else {
-      pais = partes[0] || '';
-    }
-
-    const m = normalizar(municipio);
-    const d = normalizar(departamento);
-    const p = normalizar(pais);
-    if (['BOGOTA', 'BOGOTA D C'].includes(m) && d === 'BOGOTA D C' && p === 'COLOMBIA') {
-      municipio = 'BOGOTÁ';
-      departamento = 'BOGOTÁ D.C.';
-      pais = 'COLOMBIA';
-    }
-
-    return {
-      original,
-      municipio,
-      departamento,
-      pais,
-      opcionEsperada: departamento
-        ? municipio + ' (' + departamento + ', ' + pais + ')'
-        : municipio + ' (' + pais + ')'
-    };
-  }
-
-  const departamentos = [
-    'AMAZONAS', 'ANTIOQUIA', 'ARAUCA', 'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA',
-    'ATLANTICO', 'BOGOTA D C', 'BOLIVAR', 'BOYACA', 'CALDAS', 'CAQUETA', 'CASANARE', 'CAUCA',
-    'CESAR', 'CHOCO', 'CORDOBA', 'CUNDINAMARCA', 'GUAINIA', 'GUAVIARE', 'HUILA', 'LA GUAJIRA',
-    'MAGDALENA', 'META', 'NARINO', 'NORTE DE SANTANDER', 'PUTUMAYO', 'QUINDIO', 'RISARALDA',
-    'SANTANDER', 'SUCRE', 'TOLIMA', 'VALLE DEL CAUCA', 'VAUPES', 'VICHADA'
-  ].sort((a, b) => b.length - a.length);
-
-  const n = normalizar(original);
-  for (const dep of departamentos) {
-    const sufijo = ' ' + dep;
-    if (!n.endsWith(sufijo)) continue;
-    const muni = n.slice(0, -sufijo.length).trim();
-    if (muni) {
-      return {
-        original,
-        municipio: muni,
-        departamento: dep,
-        pais: 'COLOMBIA',
-        opcionEsperada: muni + ' (' + dep + ', COLOMBIA)'
-      };
-    }
-  }
-
-  const partes = original.split(',').map((x) => x.trim()).filter(Boolean);
-  if (partes.length >= 3) {
-    const municipio = partes[0];
-    const departamento = partes[1];
-    const pais = partes.slice(2).join(', ');
-    return {
-      original,
-      municipio,
-      departamento,
-      pais,
-      opcionEsperada: municipio + ' (' + departamento + ', ' + pais + ')'
-    };
-  }
-  if (partes.length === 2) {
-    return {
-      original,
-      municipio: partes[0],
-      departamento: '',
-      pais: partes[1],
-      opcionEsperada: partes[0] + ' (' + partes[1] + ')'
-    };
-  }
-
-  // Compatibilidad con registros antiguos que solo traían municipio.
-  return { original, municipio: original, departamento: '', pais: 'COLOMBIA', opcionEsperada: '' };
-}
 
 async function visible(locator) {
   try {
@@ -683,188 +595,63 @@ if (
   }
 }
 
-  async #seleccionarCiudadNacimiento(locator, valor, etiqueta) {
+  async seleccionarCiudadNacimiento(locator, valor, etiqueta = 'Ciudad de Nacimiento', permitirRespaldo = true) {
     const lugar = separarCiudadNacimiento(valor);
     if (!lugar.municipio) throw new Error('El valor para ' + etiqueta + ' está vacío.');
-
-    const pais = lugar.pais || 'COLOMBIA';
-    const paises = variantesPais(pais);
-    const departamento = normalizar(lugar.departamento);
-    const aliasesCiudad = {
-      'BOGOTA D C': ['BOGOTA'],
-      'BOGOTA': ['BOGOTA'],
-      'VILLA DE SAN DIEGO DE UBATE': ['UBATE'],
-      'SAN ANDRES DE TUMACO': ['TUMACO'],
-      'GUADALAJARA DE BUGA': ['BUGA']
-    };
-    const originalN = normalizar(lugar.municipio);
-    const ciudadesSolicitadas = [...new Set([lugar.municipio, ...(aliasesCiudad[originalN] || [])])];
-
-    await locator.scrollIntoViewIfNeeded().catch(() => {});
-    await locator.evaluate((el) => {
-      el.setAttribute('autocomplete', 'off');
-      el.setAttribute('autocorrect', 'off');
-      el.setAttribute('spellcheck', 'false');
-    }).catch(() => {});
-
-    const leer = async () => String(await locator.inputValue().catch(() => '')).trim().replace(/\s+/g, ' ');
-    const escribir = async (ciudad) => {
-      await locator.click({ clickCount: 3 }).catch(() => {});
-      await locator.fill('');
-      const texto = normalizar(ciudad) === 'BOGOTA D C' ? 'BOGOTA' : String(ciudad);
-      await locator.pressSequentially(texto, { delay: 90 });
-      await this.page.waitForTimeout(700);
-    };
-
-    const coincideLugar = (valorFinal, ciudad, fallback = false) => {
-      const finalN = normalizar(valorFinal);
-      const ciudadN = normalizar(ciudad);
-      if (!finalN || !ciudadN) return false;
-      const cabecera = normalizar(String(valorFinal).split('(')[0].split(',')[0]);
-      const ciudadOk = cabecera === ciudadN || cabecera.startsWith(ciudadN) || ciudadN.startsWith(cabecera);
-      if (!ciudadOk) return false;
-
-      const paisOk = paises.some((p) => p && finalN.includes(p));
-      if (!paisOk) return false;
-
-      // En Colombia, para el intento exacto se exige además el departamento.
-      // En el respaldo por capital no, porque Bogotá (capital de Cundinamarca)
-      // aparece en BIOFILE como Bogotá D.C.
-      if (esColombia(pais) && departamento && !fallback) {
-        return finalN.includes(departamento);
-      }
-      return true;
-    };
-
-    const intentar = async (ciudad, fallback = false) => {
-      await escribir(ciudad);
-      const marca = 'biofile-lugar-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-      const encontrado = await this.page.evaluate(({ ciudad, paises, departamento, marca, esCO, fallback }) => {
-        const norm = (v) => String(v || '')
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^a-zA-Z0-9]+/g, ' ').trim().toUpperCase();
-        const visible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-        const c = norm(ciudad);
-        const dep = norm(departamento);
-        const ps = (paises || []).map(norm).filter(Boolean);
-        const nodos = [...document.querySelectorAll(
-          'li,a,button,[role="option"],.dropdown-item,.ui-menu-item,.tt-suggestion,.autocomplete-suggestion,div,span,td'
-        )];
-        const candidatos = [];
-        const vistos = new Set();
-
-        for (const el of nodos) {
-          if (!visible(el)) continue;
-          const txt = String(el.textContent || '').trim().replace(/\s+/g, ' ');
-          if (!txt || txt.length > 180 || vistos.has(txt)) continue;
-          const n = norm(txt);
-          const cabeza = norm(txt.split('(')[0].split(',')[0]);
-          let score = 0;
-          if (cabeza === c) score += 120;
-          else if (cabeza.startsWith(c) || c.startsWith(cabeza)) score += 90;
-          else if (n.includes(c)) score += 55;
-          else continue;
-
-          const paisOk = ps.some((p) => p && n.includes(p));
-          if (paisOk) score += 80;
-          if (esCO && dep && !fallback && n.includes(dep)) score += 45;
-          const tag = el.tagName;
-          if (tag === 'LI' || el.getAttribute('role') === 'option') score += 20;
-          else if (tag === 'A' || tag === 'BUTTON') score += 14;
-          else if (tag === 'DIV') score += 4;
-          score -= Math.min(el.childElementCount, 8) * 2;
-          vistos.add(txt);
-          candidatos.push({ el, txt, score, paisOk, depOk: !dep || n.includes(dep) });
-        }
-
-        candidatos.sort((a, b) => b.score - a.score || a.txt.length - b.txt.length);
-        const mejor = candidatos.find((x) => x.paisOk && (fallback || !esCO || !dep || x.depOk) && x.score >= 175)
-          || candidatos.find((x) => x.paisOk && x.score >= 155);
-        if (!mejor) return { texto: '', opciones: candidatos.slice(0, 8).map((x) => x.txt) };
-        mejor.el.setAttribute('data-biofile-lugar-opcion', marca);
-        return { texto: mejor.txt, opciones: candidatos.slice(0, 8).map((x) => x.txt) };
-      }, { ciudad, paises, departamento, marca, esCO: esColombia(pais), fallback }).catch(() => ({ texto: '', opciones: [] }));
-
-      if (encontrado.texto) {
-        const selector = '[data-biofile-lugar-opcion="' + marca + '"]';
-        await this.page.locator(selector).first().click({ force: true }).catch(() => {});
-        await this.page.waitForTimeout(450);
-        const final = await leer();
-        if (coincideLugar(final, ciudad, fallback)) {
-          return { ok: true, final, opcion: encontrado.texto, fallback, opciones: encontrado.opciones || [] };
-        }
-      }
-
-      // Respaldo por teclado para menús cuyo DOM no permite identificar el LI.
-      for (let pos = 0; pos <= 15; pos += 1) {
-        await escribir(ciudad);
-        await locator.focus().catch(() => {});
-        for (let i = 0; i < pos; i += 1) {
-          await this.page.keyboard.press('ArrowDown').catch(() => {});
-          await this.page.waitForTimeout(55);
-        }
-        await this.page.keyboard.press('Enter').catch(() => {});
-        await this.page.waitForTimeout(350);
-        const final = await leer();
-        if (coincideLugar(final, ciudad, fallback)) {
-          return { ok: true, final, opcion: final, fallback, opciones: encontrado.opciones || [] };
-        }
-      }
-      return { ok: false, opciones: encontrado.opciones || [] };
-    };
-
-    let resultado = null;
+    const consultas = claveCiudad(lugar.municipio)==='BOGOTA'
+      ? ['bogota'] : [...new Set([lugar.municipio, claveCiudad(lugar.municipio)])];
     let opcionesVistas = [];
-    for (const ciudad of ciudadesSolicitadas) {
-      const r = await intentar(ciudad, false);
-      opcionesVistas = r.opciones || opcionesVistas;
-      if (r.ok) {
-        resultado = r;
-        break;
+    await locator.scrollIntoViewIfNeeded();
+    const codigoNacimiento = this.page.locator('#HdfCiudadNacimiento');
+    if(await codigoNacimiento.count()) await codigoNacimiento.evaluate(el => { el.value=''; });
+    for (const consulta of consultas) {
+      await locator.fill('');
+      await locator.pressSequentially(consulta, { delay: 25 });
+      // Esperar sugerencias sin repetir hasta 16 veces la escritura completa.
+      for (let intento = 0; intento < 8; intento++) {
+        await this.page.waitForTimeout(250);
+        const marca = 'nacimiento-' + Date.now() + '-' + intento;
+        const opciones = await this.page.evaluate(({marca}) => {
+          const nodos = [...document.querySelectorAll('li,[role="option"],.ItemLista,.Seleccionado,.dropdown-item,.ui-menu-item,.tt-suggestion,.autocomplete-suggestion')];
+          return nodos.filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+            .map((el,i) => {
+              const id = marca + '-' + i;
+              el.setAttribute('data-biofile-lugar-opcion',id);
+              return {id,texto:String(el.textContent || '').trim().replace(/\s+/g,' ')};
+            }).filter(op => op.texto && op.texto.length < 250);
+        }, {marca});
+        opcionesVistas = opciones.map(op => op.texto);
+        const elegida = resolverNacimiento(opcionesVistas,lugar);
+        if(!elegida) continue;
+        const opcion = opciones.find(op => op.texto === elegida);
+        await this.page.locator('[data-biofile-lugar-opcion="' + opcion.id + '"]').click();
+        const final = await locator.inputValue();
+        if(!coincideNacimiento(final,lugar)) throw new Error('BIOFILE no confirmó el lugar de nacimiento seleccionado: ' + lugar.original);
+        if(await codigoNacimiento.count() && !(await codigoNacimiento.inputValue()).trim()) {
+          throw new Error('BIOFILE no asignó el código del lugar de nacimiento seleccionado.');
+        }
+        await locator.evaluate(el => {
+          el.dispatchEvent(new Event('input',{bubbles:true}));
+          el.dispatchEvent(new Event('change',{bubbles:true}));
+          el.blur();
+        });
+        this.logger?.info('Ciudad de nacimiento seleccionada exactamente en BIOFILE.', {valorGoogleSheets:lugar.original,valorFinal:final});
+        return;
       }
     }
-
-    if (!resultado) {
-      const capital = esColombia(pais)
-        ? capitalDepartamentoColombia(lugar.departamento)
-        : capitalPais(pais);
-      if (capital && !ciudadesSolicitadas.some((c) => normalizar(c) === normalizar(capital))) {
-        const r = await intentar(capital, true);
-        opcionesVistas = r.opciones || opcionesVistas;
-        if (r.ok) resultado = r;
-      }
+    const respaldo = 'BOGOTÁ (BOGOTÁ D.C., COLOMBIA)';
+    if(permitirRespaldo && !coincideNacimiento(respaldo,lugar)) {
+      await this.seleccionarCiudadNacimiento(locator,respaldo,etiqueta,false);
+      const ajuste = {campo:'ciudadNacimiento',original:lugar.original,aplicado:respaldo,
+        motivo:'BIOFILE no ofreció una coincidencia válida y única para el lugar solicitado.',fecha:new Date().toISOString()};
+      this.ajustesNacimiento = [ajuste];
+      await activity('Se aplicó Bogotá como lugar de nacimiento de respaldo.', {
+        ajustesNacimiento:this.ajustesNacimiento,persist:true,event:'BIRTHPLACE_FALLBACK'
+      });
+      this.logger?.warn('Lugar de nacimiento cambiado a Bogotá por falta de coincidencia.',ajuste);
+      return;
     }
-
-    if (!resultado) {
-      const capital = esColombia(pais)
-        ? capitalDepartamentoColombia(lugar.departamento)
-        : capitalPais(pais);
-      throw new Error(
-        'No se pudo seleccionar la ciudad de nacimiento "' + lugar.municipio + '" en ' + pais + '. ' +
-        (capital ? 'También se intentó la capital de respaldo "' + capital + '". ' : '') +
-        'Opciones detectadas: ' + (opcionesVistas.length ? opcionesVistas.join(' | ') : 'BIOFILE no expuso opciones identificables') + '.'
-      );
-    }
-
-    await locator.evaluate((el) => {
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new Event('blur', { bubbles: true }));
-    }).catch(() => {});
-
-    const datosLog = {
-      valorGoogleSheets: lugar.original,
-      municipioOriginal: lugar.municipio,
-      pais,
-      departamento: lugar.departamento || '',
-      valorFinal: resultado.final,
-      opcionSeleccionada: resultado.opcion
-    };
-    if (resultado.fallback) {
-      this.logger?.warn('Ciudad de nacimiento no encontrada; se aplicó capital de respaldo.', datosLog);
-    } else {
-      this.logger?.info('Ciudad de nacimiento seleccionada correctamente en BIOFILE.', datosLog);
-    }
+    throw new Error('No se encontró una opción única para el lugar de nacimiento "' + lugar.original + '". Opciones: ' + opcionesVistas.slice(0,8).join(' | '));
   }
 
   async #esperarProcesamientoBiofile(timeoutMs = 7000) {
@@ -896,7 +683,7 @@ if (
     const campoNormalizado = normalizar(etiqueta);
     /* RELACION_EMPRESA_BIOFILE_V69B_BIOFILE */
     if (campoNormalizado === 'CIUDAD DE NACIMIENTO') {
-      await this.#seleccionarCiudadNacimiento(locator, valorOriginal, etiqueta);
+      await this.seleccionarCiudadNacimiento(locator, valorOriginal, etiqueta);
       return;
     }
 
@@ -1183,6 +970,7 @@ async #escribirEnControl(
   }
 
   async llenarOrden(r, defaults) {
+    this.ajustesNacimiento = [];
     this.logger?.info('Llenando formulario.', { documento: r.numeroDocumento, fila: r.row });
 
     const pacienteExistente = await this.#ingresarDocumentoYDetectarPaciente(r);
@@ -1386,7 +1174,7 @@ await llenarPaciente(
       await this.#llenarProductoInferior(defaults);
     }
 
-    return { pacienteExistente, relacionEmpresa: relacionEmpresaAplicada };
+    return { pacienteExistente, relacionEmpresa: relacionEmpresaAplicada, ajustesNacimiento:this.ajustesNacimiento };
   }
 
   async abrirOrdenExistente(numeroOrden, documentoEsperado) {
