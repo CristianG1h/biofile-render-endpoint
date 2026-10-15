@@ -406,6 +406,7 @@ function jobPublico(job) {
     guardadoIntentado: Boolean(job.guardadoIntentado),
     metrics: job.metrics || {},
     resultado: job.resultado || null,
+    ajustesNacimiento: job.ajustesNacimiento || job.resultado?.ajustesNacimiento || [],
     error: job.error || null,
     /* JOB_PUBLIC_PROGRESS_V1 */
     progreso: Number(job.progreso || 0),

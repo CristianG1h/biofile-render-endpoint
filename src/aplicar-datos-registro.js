@@ -80,15 +80,19 @@ async function controlCercaDeEtiqueta(page, config, fieldKey, etiqueta) {
 }
 
 async function seleccionarOptionExacta(locator, valor, etiqueta) {
-  const deseado = normalizar(valor);
+  // Alias explícito: no usar coincidencias parciales entre localidades.
+  const clave = etiqueta === 'Localidad'
+    ? (v) => normalizar(v).replace(/^SANTA FE$/, 'SANTAFE')
+    : normalizar;
+  const deseado = clave(valor);
   const opciones = await locator.locator('option').evaluateAll((items) => items.map((item) => ({
     value: item.value,
     text: item.textContent || ''
   })));
 
-  const coincidencia = opciones.find((opcion) => normalizar(opcion.text) === deseado || normalizar(opcion.value) === deseado);
+  const coincidencia = opciones.find((opcion) => opcion.value && (clave(opcion.text) === deseado || clave(opcion.value) === deseado));
   if (!coincidencia) {
-    throw new Error(`Biofile no contiene la opción de localidad "${valor}".`);
+    throw new Error(`Biofile no contiene la opción de ${etiqueta.toLowerCase()} "${valor}".`);
   }
 
   await locator.selectOption(coincidencia.value);

@@ -53,7 +53,7 @@ export class JobService {
         lastStage = info.etapa; lastEvent = time;
       }
       if (Number.isFinite(info.porcentaje)) job.progreso = Math.max(job.progreso, Math.min(99, info.porcentaje));
-      for (const k of ['etapa', 'detalle', 'numeroOrden', 'guardadoIntentado', 'guardadoConfirmado', 'ultimoPasoEjecutado', 'productosAgregados', 'captura', 'selector', 'campo']) if (info[k] !== undefined) job[k] = info[k];
+      for (const k of ['etapa', 'detalle', 'numeroOrden', 'guardadoIntentado', 'guardadoConfirmado', 'ultimoPasoEjecutado', 'productosAgregados', 'captura', 'selector', 'campo', 'ajustesNacimiento']) if (info[k] !== undefined) job[k] = info[k];
       job.ultimaActividad = now();
       if (info.etapa || info.persist) {
         job.events.push({ event: info.event || info.etapa || 'CHECKPOINT', at: job.ultimaActividad, durationMs: time - start });
