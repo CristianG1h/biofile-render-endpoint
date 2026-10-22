@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import crypto from 'node:crypto';
-import { execution, registerSession, checkCancelled } from './jobs/execution.js';
+import { execution, registerSession, checkCancelled, activity } from './jobs/execution.js';
 import { asegurarDirectorio } from './util.js';
 
 async function locatorVisible(locator) {
@@ -51,13 +51,19 @@ export async function crearSesion(config, logger) {
   const tail = previous.catch(() => {}).then(() => pending);
   accountTails.set(account, tail);
   if (hadPrevious) {
-    await activity('Esperando que termine otra operación en esta sesión BIOFILE.', { etapa:'Esperando sesión BIOFILE', persist:true });
     try {
+      await activity('Esperando que termine otra operación en esta sesión BIOFILE.', { etapa:'Esperando sesión BIOFILE', persist:true });
       await waitForAccountTurn(previous);
       await activity('Turno BIOFILE disponible. Abriendo navegador.', { persist:true });
     } catch (error) {
       unlock();
-      if (accountTails.get(account) === tail) accountTails.delete(account);
+      if (accountTails.get(account) === tail) {
+        // Un fallo del aviso/espera no debe desbloquear la sesión anterior.
+        accountTails.set(account, previous);
+        void previous.finally(() => {
+          if (accountTails.get(account) === previous) accountTails.delete(account);
+        });
+      }
       throw error;
     }
   }

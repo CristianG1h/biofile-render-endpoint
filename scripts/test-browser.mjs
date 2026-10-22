@@ -5,12 +5,35 @@ import path from 'node:path';
 import { BiofileProducts } from '../src/biofile-products.js';
 import { reopenOrder } from '../src/biofile-order-search.js';
 import { crearSesion, cerrarNavegador } from '../src/browser.js';
+import { execution } from '../src/jobs/execution.js';
 const browser=await chromium.launch({headless:true});
 try {
   const sessionConfig=(usuario,password='synthetic-test')=>({biofile:{usuario,contrasena:password},browser:{headless:true,authPath:path.join(process.env.TEMP || '/tmp','biofile-synthetic-test','auth.json')},paths:{screenshots:path.join(process.env.TEMP || '/tmp','biofile-synthetic-test')},selectors:{}});
   const sessionA=await crearSesion(sessionConfig('SYNTHETIC_A'));
-  await sessionA.context.addCookies([{name:'account',value:'A',domain:'example.test',path:'/'}]);
+  // Reproduce la espera real de dos operaciones para la misma cuenta.
+  const progress=[];
+  let notifyWaiting;
+  const waiting=new Promise(resolve=>{notifyWaiting=resolve;});
+  const scope={signal:new AbortController().signal,progress:async info=>{progress.push(info);notifyWaiting();}};
+  const concurrent=execution.run(scope,()=>crearSesion(sessionConfig('SYNTHETIC_A')));
+  await Promise.race([waiting,concurrent.then(()=>{throw Error('La segunda sesión no esperó');})]);
+  let opened=false;concurrent.then(()=>{opened=true;},()=>{});
+  await new Promise(resolve=>setTimeout(resolve,30));assert.equal(opened,false);
   await sessionA.browser.close();
+  const concurrentSession=await concurrent;
+  assert(progress.some(info=>/Turno BIOFILE disponible/.test(info.detalle)));
+  // Un fallo al persistir el aviso no deja un bloqueo ni permite saltarse al dueño.
+  await assert.rejects(execution.run({signal:new AbortController().signal,progress:async()=>{throw Error('synthetic progress failure');}},()=>crearSesion(sessionConfig('SYNTHETIC_A'))),/synthetic progress failure/);
+  let recoveredOpened=false;
+  const recovered=crearSesion(sessionConfig('SYNTHETIC_A'));
+  recovered.then(()=>{recoveredOpened=true;},()=>{});
+  await new Promise(resolve=>setTimeout(resolve,30));assert.equal(recoveredOpened,false);
+  await concurrentSession.browser.close();
+  const recoveredSession=await recovered;await recoveredSession.browser.close();
+  console.log('Browser: misma cuenta espera turno y recupera un fallo de progreso sin bloqueo.');
+  const sessionForCookie=await crearSesion(sessionConfig('SYNTHETIC_A'));
+  await sessionForCookie.context.addCookies([{name:'account',value:'A',domain:'example.test',path:'/'}]);
+  await sessionForCookie.browser.close();
   const sessionB=await crearSesion(sessionConfig('SYNTHETIC_B'));
   assert.equal((await sessionB.context.cookies()).length,0);await sessionB.browser.close();
   const restored=await crearSesion(sessionConfig('SYNTHETIC_A'));
